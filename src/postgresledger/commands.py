@@ -19,6 +19,7 @@ from .core import (
     list_migrations,
     pgschema_dump,
     pgschema_plan,
+    print_plan,
     psql,
     record_migration_sql,
     require_up_to_date,
@@ -112,7 +113,8 @@ def cmd_baseline(cfg: Config, connection: Connection, args) -> int:
             cfg.schema_file.parent.mkdir(parents=True, exist_ok=True)
             print(f"- dump {connection.label} -> {relative(cfg.schema_file)}")
             pgschema_dump(cfg, connection, cfg.schema_file)
-            baseline = generate_migration(cfg, scratch_server, "baseline", f"baseline taken from {connection.database}")
+            baseline = generate_migration(cfg, scratch_server, "baseline", f"baseline taken from {connection.database}",
+                                          args.verbose)
             if baseline is None:
                 sys.exit("the database is empty, nothing to snapshot")
             ensure_meta(cfg, connection)
@@ -130,7 +132,7 @@ def cmd_baseline(cfg: Config, connection: Connection, args) -> int:
             plan = pgschema_plan(cfg, shadow, actual, scratch_server)
     if plan.sql:
         print(f"✘ {connection.label} does not match the migrations, so they cannot be recorded as already there:\n")
-        print(plan.human)
+        print_plan(plan, args.verbose)
         print("\nempty database: `pgl apply` instead; otherwise align it first (see `pgl compare`)")
         return 1
     # every record in one transaction: all of them or none
@@ -142,7 +144,7 @@ def cmd_baseline(cfg: Config, connection: Connection, args) -> int:
 
 def cmd_new(cfg: Config, args) -> None:
     with scratch.server() as scratch_server:
-        generate_migration(cfg, scratch_server, args.name, args.note or "change in schema.sql")
+        generate_migration(cfg, scratch_server, args.name, args.note or "change in schema.sql", args.verbose)
 
 
 def cmd_apply(cfg: Config, connection: Connection, args) -> None:
@@ -217,7 +219,7 @@ def cmd_drift(cfg: Config, connection: Connection, args) -> int:
         print(f"✔ {connection.label}: no drift, the database matches its migrations")
         return 0
     print(f"✘ {connection.label}: DRIFT - the database was changed outside of migrations:\n")
-    print(plan.human)
+    print_plan(plan, args.verbose)
     if pending:
         print("\nrun `pgl apply` first, then keep or drop the changes:")
     print("\nkeep the changes:   pgl capture <name>")
@@ -233,7 +235,7 @@ def cmd_capture(cfg: Config, connection: Connection, args) -> None:
     pgschema_dump(cfg, connection, cfg.schema_file)
     note = f"manual changes captured from {connection.database} (recorded as captured there)"
     with scratch.server() as scratch_server:
-        migration = generate_migration(cfg, scratch_server, args.name, note)
+        migration = generate_migration(cfg, scratch_server, args.name, note, args.verbose)
     if migration is None:
         cfg.schema_file.write_text(schema_before)
         print(f"{connection.label}: no drift, nothing captured")

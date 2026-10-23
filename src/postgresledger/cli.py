@@ -17,6 +17,8 @@ NO_CONFIG = {"init", "setup"}
 # commands that read the project but never touch a database
 # (compare with two snapshots; compare with one checks DATABASE_NAME itself)
 NO_DATABASE = {"new", "compare"}
+# commands that make a pgschema plan; --verbose prints all of it, SQL included
+VERBOSE = {"baseline", "new", "drift", "capture"}
 
 INTRO = """\
 Versioned PostgreSQL migrations from plain SQL, without an ORM.
@@ -58,6 +60,11 @@ def add_new_arguments(command_parser: argparse.ArgumentParser) -> None:
 
 def add_apply_arguments(command_parser: argparse.ArgumentParser) -> None:
     command_parser.add_argument("--dry-run", action="store_true", help="only list what would be applied")
+
+
+def add_verbose_argument(command_parser: argparse.ArgumentParser) -> None:
+    command_parser.add_argument("-v", "--verbose", action="store_true",
+                                help="print pgschema's whole plan, including the SQL")
 
 
 def add_snapshot_arguments(command_parser: argparse.ArgumentParser) -> None:
@@ -180,6 +187,8 @@ def parser() -> argparse.ArgumentParser:
         command_parser.set_defaults(fn=command_function)
         if command.add_arguments is not None:
             command.add_arguments(command_parser)
+        if command.name in VERBOSE:
+            add_verbose_argument(command_parser)
     return main_parser
 
 

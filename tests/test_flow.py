@@ -63,7 +63,7 @@ def databases() -> set[str]:
     return set(sql("postgres", "SELECT datname FROM pg_database").splitlines())
 
 
-def test_full_flow(project, monkeypatch):
+def test_full_flow(project, monkeypatch, capsys):
     schema = project / "database" / "schema" / "schema.sql"
     migrations = project / "database" / "migrations"
     before = databases()
@@ -73,6 +73,9 @@ def test_full_flow(project, monkeypatch):
     use(monkeypatch, "pgltest_dev")
     assert run("baseline") == 0
     assert (migrations / "0001_baseline.sql").exists()
+    # the SQL is in the file; only --verbose prints it
+    output = capsys.readouterr().out
+    assert "CREATE TABLE" not in output and "0001_baseline.sql (1 to add)" in output
     assert sql("pgltest_dev", "SELECT mode FROM postgresledger.schema_migrations") == "baseline"
     use(monkeypatch, "pgltest_prod")
     assert run("apply") == 0

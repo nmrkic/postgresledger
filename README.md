@@ -1,5 +1,10 @@
 # postgresledger
 
+[![PyPI](https://img.shields.io/pypi/v/postgresledger)](https://pypi.org/project/postgresledger/)
+[![Python](https://img.shields.io/pypi/pyversions/postgresledger)](https://pypi.org/project/postgresledger/)
+[![Tests](https://github.com/nmrkic/postgresledger/actions/workflows/tests.yml/badge.svg)](https://github.com/nmrkic/postgresledger/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/pypi/l/postgresledger)](https://github.com/nmrkic/postgresledger/blob/main/LICENSE)
+
 Versioned migrations for PostgreSQL from plain SQL, without an ORM (tables,
 views, materialized views, functions, triggers), built on
 [pgschema](https://www.pgschema.com). The command is `pgl`.
@@ -245,6 +250,8 @@ environment; a variable set there wins over `.env`. `pgl --env-file .env.uat …
 (or `PGL_ENV_FILE=.env.uat`) picks another file for one run.
 Run `pgl` in the folder with `postgresledger.toml`, or point to it with
 `--config PATH`. `pgl <command> -h` describes each command.
+`baseline`, `new`, `capture` and `drift` print only what changed;
+`--verbose` (`-v`) prints pgschema's whole plan, SQL included.
 
 ## Developing postgresledger
 

@@ -212,12 +212,32 @@ def pgschema_dump(cfg: Config, connection: Connection, output_file: Path) -> Non
     output_file.write_text(dump)
 
 
+# where pgschema's readable plan starts repeating the whole SQL
+DDL_HEADER = "DDL to be executed:"
+
+
 @dataclass(frozen=True)
 class Plan:
     """What pgschema would change, in two forms. Both are empty when there is nothing to change."""
 
     sql: str  # the statements, e.g. for a migration file
-    human: str  # the same changes as a readable list for the terminal
+    human: str  # the same changes as a readable list for the terminal, followed by the SQL
+
+    @property
+    def changes(self) -> str:
+        """`human` without the SQL: the summary and the list of changed objects."""
+        return self.human.split(DDL_HEADER)[0].strip()
+
+    @property
+    def headline(self) -> str:
+        """The size of the plan, e.g. "52 to add" from pgschema's first line "Plan: 52 to add."."""
+        first_line = self.human.splitlines()[0] if self.human else ""
+        return first_line.removeprefix("Plan:").strip().removesuffix(".")
+
+
+def print_plan(plan: Plan, verbose: bool) -> None:
+    """The changed objects, and with --verbose also the SQL."""
+    print(plan.human if verbose else plan.changes)
 
 
 def pgschema_plan(cfg: Config, connection: Connection, desired: Path, scratch: Connection) -> Plan:
@@ -265,8 +285,12 @@ def write_migration(cfg: Config, name: str, sql: str, note: str) -> Migration:
     return Migration(version, name, path)
 
 
-def generate_migration(cfg: Config, scratch: Connection, name: str, note: str) -> Migration | None:
-    """schema.sql vs (every migration applied) -> new migration, then check that it reproduces schema.sql."""
+def generate_migration(cfg: Config, scratch: Connection, name: str, note: str,
+                       verbose: bool = False) -> Migration | None:
+    """schema.sql vs (every migration applied) -> new migration, then check that it reproduces schema.sql.
+
+    The plan is only printed with `verbose`: it is the content of the new file anyway.
+    """
     existing = list_migrations(cfg)
     print(f"- building the state of {len(existing)} existing migrations (scratch Postgres)")
     shadow = build_shadow(cfg, scratch, existing)
@@ -275,14 +299,16 @@ def generate_migration(cfg: Config, scratch: Connection, name: str, note: str) -
         print("no changes compared to the existing migrations")
         return None
     migration = write_migration(cfg, name, plan.sql, note)
-    print(plan.human)
+    if verbose:
+        print(plan.human)
     print(f"- verifying {migration.path.name}")
     apply_file(cfg, shadow, migration)
     # with the new migration applied, nothing should be left to change
     leftover = pgschema_plan(cfg, shadow, cfg.schema_file, scratch)
     if leftover.sql:
+        # always in full: this is the case to debug
         print(leftover.human)
         migration.path.unlink()
         sys.exit("after applying the migration the result still differs from schema.sql - migration deleted")
-    print(f"✔ created {relative(migration.path)}")
+    print(f"✔ created {relative(migration.path)} ({plan.headline})")
     return migration

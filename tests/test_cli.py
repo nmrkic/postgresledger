@@ -10,7 +10,7 @@ from postgresledger import cli
 from postgresledger.commands import database_name_from_folder
 from postgresledger.compare import SchemaObject, compare, objects
 from postgresledger.config import Config
-from postgresledger.core import list_migrations
+from postgresledger.core import Plan, list_migrations
 
 DATABASE_VARIABLES = ["DATABASE_HOST", "DATABASE_PORT", "DATABASE_USER", "DATABASE_PASSWORD",
                       "DATABASE_NAME", "DATABASE_SSLMODE", "PGL_ENV_FILE"]
@@ -162,6 +162,46 @@ def test_compare_reports_each_kind_of_difference():
     assert "only in prod (1):" in report and "orders" in report
     assert "different (1):" in report and "+    email text" in report
     assert compare(DUMP_A, DUMP_A, "a", "b").difference_count == 0
+
+
+PLAN_HUMAN = """Plan: 2 to add.
+
+Summary by type:
+  tables: 2 to add
+
+Tables:
+  + customer
+    + ix_customer_name (index)
+  + orders
+
+DDL to be executed:
+--------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS customer (id integer);
+"""
+
+
+def test_plan_changes_leave_out_the_sql():
+    plan = Plan(sql="CREATE TABLE ...", human=PLAN_HUMAN)
+    assert plan.changes.endswith("  + orders")
+    assert "CREATE TABLE" not in plan.changes and "DDL to be executed" not in plan.changes
+    assert plan.headline == "2 to add"
+
+
+def test_empty_plan():
+    plan = Plan(sql="", human="")
+    assert plan.changes == "" and plan.headline == ""
+
+
+def test_verbose_only_on_commands_with_a_plan():
+    main_parser = cli.parser()
+    for command in ("baseline", "drift"):
+        assert main_parser.parse_args([command, "--verbose"]).verbose
+        assert not main_parser.parse_args([command]).verbose
+    assert main_parser.parse_args(["new", "add_email", "-v"]).verbose
+    assert main_parser.parse_args(["capture", "orders_notes", "-v"]).verbose
+    with pytest.raises(SystemExit):
+        main_parser.parse_args(["status", "--verbose"])
 
 
 def test_every_command_is_there():
