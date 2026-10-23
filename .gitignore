@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Build output (uv build) - published to PyPI, never committed
+dist/
+build/
+
+# Local config / secrets
+.env
+.env.*
+!.env.example
+*.local.toml
+
+# Local working notes and their tooling - not published
+docs/plans/
+docs/status.md
+docs/features/
+docs/build_pdf.py
+docs/build_pptx.js
+Makefile.local
+
+# Generated locally
+README.pdf
+database/snapshots/
+
+# Claude Code (personal settings)
+.claude/
+CLAUDE.local.md
+
+# Editors / OS
+.idea/
+.vscode/
+.zed/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Scratch output
+*.log
+tmp/

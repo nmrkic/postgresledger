@@ -1,0 +1,57 @@
+# Unit tests, the full flow against a real Postgres, and ruff.
+# Runs on every push and pull request, and before every release (publish.yml).
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+
+    # the same server as docker/docker-compose.yml; the flow test creates its own databases
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+
+      # pgschema and the scratch Postgres, downloaded by `pgl setup`; pinned in these two files
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/postgresledger
+          key: postgresledger-${{ runner.os }}-${{ hashFiles('src/postgresledger/pgschema.py', 'src/postgresledger/scratch.py') }}
+
+      - name: Install
+        run: |
+          uv sync
+          uv run pgl setup
+
+      - name: Tests
+        run: uv run pytest -q -rs
+
+      - name: Ruff
+        run: uvx ruff check src tests

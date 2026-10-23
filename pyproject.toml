@@ -1,0 +1,37 @@
+[project]
+name = "postgresledger"
+version = "0.0.0"  # set from the release tag by .github/workflows/publish.yml, not here
+description = "Versioned PostgreSQL migrations from plain SQL, without an ORM: generated from schema.sql, tracked per database, with drift detection"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+authors = [{ name = "Nebojša Mrkić", email = "mrkic.nebojsa@gmail.com" }]
+dependencies = [
+    "python-dotenv>=1.2.4",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Database",
+    "Environment :: Console",
+]
+
+[project.urls]
+Homepage = "https://github.com/nmrkic/postgresledger"
+Repository = "https://github.com/nmrkic/postgresledger"
+Issues = "https://github.com/nmrkic/postgresledger/issues"
+Changelog = "https://github.com/nmrkic/postgresledger/releases"
+
+[project.scripts]
+pgl = "postgresledger.cli:main"
+postgresledger = "postgresledger.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["uv_build>=0.9,<0.12"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

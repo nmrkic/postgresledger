@@ -1,0 +1,35 @@
+# Publishes to PyPI when a version tag is pushed: git tag v0.2.0 && git push origin v0.2.0
+# The tag is the version: it is written into pyproject.toml here, before the build, and
+# never committed (the repository keeps 0.0.0). No token: PyPI trusts this workflow
+# (trusted publisher: owner nmrkic, repository postgresledger, workflow publish.yml, environment pypi).
+name: Publish to PyPI
+
+on:
+  push:
+    tags: ["v[0-9]*"]  # version tags only: v0.2.0, v1.0.0rc1
+
+jobs:
+  tests:
+    uses: ./.github/workflows/tests.yml
+
+  publish:
+    needs: tests
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # trusted publishing
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Set the version from the tag
+        run: uv version --no-sync "${GITHUB_REF_NAME#v}"  # v0.3.0 -> 0.3.0
+
+      - name: Build
+        run: uv build
+
+      - name: Publish
+        run: uv publish --trusted-publishing always

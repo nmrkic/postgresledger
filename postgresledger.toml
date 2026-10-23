@@ -1,0 +1,10 @@
+# postgresledger project settings - the same for every database, committed to git.
+# Paths are relative to this file. The database itself is DATABASE_URL in .env
+# (or in the environment), one database per run.
+
+[project]
+schema = "public"                                # schema managed by postgresledger
+schema_file = "database/schema/schema.sql"       # desired state, the source of truth
+migrations_dir = "database/migrations"
+snapshots_dir = "database/snapshots"             # pgl snapshot <name> writes here
+meta_schema = "pgschema_meta"                    # kept from dbmig, so the local databases keep their history
