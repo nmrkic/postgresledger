@@ -20,7 +20,13 @@ Ideas for `postgresledger` without a worked-out plan yet.
   first `apply`; maybe a separate file/section that is not generated.
 - **Migration number on `capture`** — two branches can get the same number;
   a CI check, or a timestamp instead of a sequence number.
-- **Multiple schemas** — pgschema works on one schema at a time.
+- **Adding an existing schema to `schemas`** — `capture` takes it in on one
+  database, but the other databases that already have the schema cannot run
+  that migration. Needs a way to record one migration as `baseline` on them
+  (e.g. `pgl baseline --version NNNN`, checked against `drift` first).
+- **References in both directions between two schemas** — the plan database
+  and the migrations load schemas in the order of `schemas`, so a schema can
+  only refer to the ones before it.
 - **Docker image for `postgresledger`** (pgschema + psql + Python) for CI and deploy.
 - **Publish to PyPI** — the name `postgresledger` was free on 2026-10-21; until
   then it installs from git (`uv tool install git+<url>`).

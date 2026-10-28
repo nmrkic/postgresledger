@@ -3,6 +3,9 @@
 pgschema writes every object as its own block under a header
 `-- Name: <name>; Type: <type>; Schema: ...`, in a stable order, so two dumps
 can be compared block by block.
+
+With several schemas, a snapshot is one dump per schema, each under a
+`-- schema: <name>` line, and objects are named <schema>.<name>.
 """
 
 from __future__ import annotations
@@ -11,6 +14,8 @@ import difflib
 from dataclasses import dataclass
 
 HEADER_START = "-- Name: "
+# starts each schema's part in a snapshot or a migration of several schemas
+SCHEMA_MARKER = "-- schema: "
 # lines around an object's SQL that are not part of it
 SEPARATOR_LINES = ("", "--")
 
@@ -60,11 +65,22 @@ def objects(dump: str) -> dict[SchemaObject, str]:
     sql_by_object: dict[SchemaObject, str] = {}
     current_object = None
     current_lines: list[str] = []
+    # set by a `-- schema: <name>` line; a dump of one schema has none
+    current_schema = ""
     for line in dump.splitlines():
+        if line.startswith(SCHEMA_MARKER):
+            # the previous object ends where the next schema starts
+            if current_object is not None:
+                add_object(sql_by_object, current_object, current_lines)
+            current_object = None
+            current_schema = line.removeprefix(SCHEMA_MARKER).strip()
+            continue
         header_object = parse_header(line)
         if header_object is not None:
             if current_object is not None:
                 add_object(sql_by_object, current_object, current_lines)
+            if current_schema:
+                header_object = SchemaObject(header_object.type, f"{current_schema}.{header_object.name}")
             current_object = header_object
             current_lines = []
         elif current_object is not None:

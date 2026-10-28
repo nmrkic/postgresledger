@@ -53,12 +53,16 @@ class Config:
         self.path = path.resolve()
         self.root = self.path.parent  # paths in the config file are relative to it
         project = tomllib.loads(self.path.read_text()).get("project", {})
-        self.schema = project.get("schema", "public")  # the schema pgschema manages
-        self.schema_file = self.root / project.get("schema_file", "database/schema/schema.sql")
+        # every schema pgschema manages, with the file of its desired state, in the order of the config
+        self.schema_files = schema_files(self.root, project)
+        self.schemas = list(self.schema_files)
         self.migrations_dir = self.root / project.get("migrations_dir", "database/migrations")
         self.snapshots_dir = self.root / project.get("snapshots_dir", "database/snapshots")
         self.meta_schema = project.get("meta_schema", DEFAULT_META_SCHEMA)
         self.meta_table = f"{self.meta_schema}.schema_migrations"
+        if self.meta_schema in self.schemas:
+            sys.exit(f"{CONFIG_NAME}: meta_schema '{self.meta_schema}' is for the tracking table only, "
+                     "it cannot be a managed schema")
         self.env_file = env_file or Path(os.environ.get("PGL_ENV_FILE") or self.root / ".env")
 
         # the one database this run works on; None when DATABASE_NAME is not set.
@@ -75,6 +79,49 @@ class Config:
                 database=database,
                 sslmode=os.environ.get("DATABASE_SSLMODE", "prefer"),
             )
+
+    @property
+    def names_schemas(self) -> bool:
+        """Whether migrations and snapshots name the schema of each part.
+
+        A project with only `public` keeps the plain pgschema output; any other schema needs its
+        name, because pgschema writes the objects of a schema without it (CREATE TABLE invoice).
+        """
+        return self.schemas != ["public"]
+
+
+def is_valid_schema_name(name: str) -> bool:
+    """Lowercase letters, digits and _, not starting with a digit: safe unquoted in SQL and as a file name."""
+    allowed_characters = set("abcdefghijklmnopqrstuvwxyz0123456789_")
+    return isinstance(name, str) and name != "" and not name[0].isdigit() and set(name) <= allowed_characters
+
+
+def schema_files(root: Path, project: dict) -> dict[str, Path]:
+    """Every managed schema with the file of its desired state, in the order of the config.
+
+    `schemas = [...]` keeps one <schema_dir>/<schema>.sql per schema. The older `schema` and
+    `schema_file` are one schema with its own file.
+    """
+    if "schemas" not in project:
+        schema = project.get("schema", "public")
+        if not is_valid_schema_name(schema):
+            sys.exit(f"{CONFIG_NAME}: schema '{schema}' - lowercase letters, digits and _ only")
+        return {schema: root / project.get("schema_file", "database/schema/schema.sql")}
+
+    if "schema" in project or "schema_file" in project:
+        sys.exit(f"{CONFIG_NAME}: use either `schemas` and `schema_dir`, or `schema` and `schema_file`, not both")
+    schemas = project["schemas"]
+    if not isinstance(schemas, list) or not schemas:
+        sys.exit(f'{CONFIG_NAME}: schemas must be a list of names, e.g. ["public", "billing"]')
+    schema_dir = root / project.get("schema_dir", "database/schema")
+    files = {}
+    for schema in schemas:
+        if not is_valid_schema_name(schema):
+            sys.exit(f"{CONFIG_NAME}: schema '{schema}' - lowercase letters, digits and _ only")
+        if schema in files:
+            sys.exit(f"{CONFIG_NAME}: schema '{schema}' is listed twice")
+        files[schema] = schema_dir / f"{schema}.sql"
+    return files
 
 
 def relative(path: Path) -> str:

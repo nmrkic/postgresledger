@@ -147,6 +147,70 @@ def test_full_flow(project, monkeypatch, capfd):
     assert databases() == before
 
 
+TWO_SCHEMAS = """
+    CREATE TABLE public.customer (id int PRIMARY KEY, name text NOT NULL);
+    CREATE SCHEMA billing;
+    CREATE TABLE billing.invoice (id int PRIMARY KEY, customer_id int NOT NULL REFERENCES public.customer (id));
+    CREATE VIEW billing.invoice_count AS
+        SELECT c.name, count(i.id) AS invoices FROM public.customer c JOIN billing.invoice i ON i.customer_id = c.id
+        GROUP BY c.name;
+"""
+
+
+def test_flow_with_two_schemas(project, monkeypatch):
+    (project / "postgresledger.toml").write_text('[project]\nschemas = ["public", "billing"]\n')
+    schema_dir = project / "database" / "schema"
+    migrations = project / "database" / "migrations"
+
+    # dev has both schemas, billing refers to public: one baseline with a part per schema
+    sql("pgltest_dev", TWO_SCHEMAS)
+    use(monkeypatch, "pgltest_dev")
+    assert run("baseline") == 0
+    baseline = (migrations / "0001_baseline.sql").read_text()
+    assert "-- schema: public\nSET search_path TO public;" in baseline
+    assert "-- schema: billing\nCREATE SCHEMA IF NOT EXISTS billing;\nSET search_path TO billing;" in baseline
+    assert "CREATE TABLE IF NOT EXISTS invoice" in (schema_dir / "billing.sql").read_text()
+
+    # an empty database gets every object in its own schema
+    use(monkeypatch, "pgltest_prod")
+    assert run("apply") == 0
+    assert sql("pgltest_prod", "SELECT table_schema FROM information_schema.tables "
+                               "WHERE table_name = 'invoice'") == "billing"
+    assert run("drift") == 0
+
+    # a database that already has both schemas is adopted
+    sql("pgltest_uat", TWO_SCHEMAS)
+    use(monkeypatch, "pgltest_uat")
+    assert run("baseline") == 0
+
+    # a change in billing.sql only: the migration has only the billing part
+    billing_file = schema_dir / "billing.sql"
+    billing_file.write_text(billing_file.read_text().replace("customer_id integer NOT NULL,",
+                                                             "customer_id integer NOT NULL,\n    total numeric,"))
+    assert run("new", "invoice_total") == 0
+    new_migration = (migrations / "0002_invoice_total.sql").read_text()
+    assert "-- schema: billing\nSET search_path TO billing;" in new_migration
+    assert "-- schema: public" not in new_migration
+    for db in DBS[1:]:
+        use(monkeypatch, db)
+        assert run("apply") == 0
+        assert run("drift") == 0
+
+    # a change by hand in billing: drift, captured into billing.sql, applied elsewhere
+    sql("pgltest_prod", "CREATE INDEX invoice_customer_idx ON billing.invoice (customer_id)")
+    use(monkeypatch, "pgltest_prod")
+    assert run("drift") == 1
+    assert run("snapshot", "prod") == 0
+    assert run("compare", "prod") == 0
+    assert run("capture", "invoice_index") == 0
+    assert "invoice_customer_idx" in billing_file.read_text()
+    use(monkeypatch, "pgltest_uat")
+    assert run("compare", "prod") == 1
+    assert run("apply") == 0
+    assert run("drift") == 0
+    assert sql("pgltest_uat", "SELECT schemaname FROM pg_indexes WHERE indexname = 'invoice_customer_idx'") == "billing"
+
+
 def test_baseline_refuses_a_database_that_differs(project, monkeypatch):
     sql("pgltest_dev", "CREATE TABLE customer (id int PRIMARY KEY)")
     use(monkeypatch, "pgltest_dev")

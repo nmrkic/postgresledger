@@ -11,19 +11,25 @@ from . import pgschema, scratch
 from .compare import compare
 from .config import CONFIG_NAME, Config, Connection, relative
 from .core import (
+    Migration,
+    Plan,
     applied,
     apply_file,
     build_shadow,
     check_checksums,
+    create_missing_schemas,
+    dump_schemas,
+    dump_text,
     ensure_meta,
     generate_migration,
+    has_changes,
     list_migrations,
-    pgschema_dump,
-    pgschema_plan,
-    print_plan,
+    plan_schemas,
+    print_plans,
     psql,
     record_migration_sql,
     require_up_to_date,
+    schema_files_in,
 )
 
 
@@ -37,6 +43,9 @@ def config_file_text(folder: str) -> str:
 [project]
 schema = "public"                                # schema managed by postgresledger
 schema_file = "{folder}/schema/schema.sql"          # desired state, the source of truth
+# several schemas: instead of schema and schema_file
+# schemas = ["public", "billing"]                  # in this order inside every migration
+# schema_dir = "{folder}/schema"                      # one <schema>.sql per schema
 migrations_dir = "{folder}/migrations"
 snapshots_dir = "{folder}/snapshots"                # pgl snapshot <name> writes here
 meta_schema = "postgresledger"                         # tracking table: <meta_schema>.schema_migrations
@@ -137,13 +146,28 @@ def cmd_setup(args) -> int:
     return pgschema.setup()
 
 
+def schema_files_label(cfg: Config) -> str:
+    """The schema files as the user would type them, e.g. for "dump ... -> <files>"."""
+    return ", ".join(relative(schema_file) for schema_file in cfg.schema_files.values())
+
+
+def database_plans(cfg: Config, connection: Connection, scratch_server: Connection, migrations: list[Migration],
+                   verbose: bool) -> dict[str, Plan]:
+    """What turns the state of `migrations` into the database as it is, per schema."""
+    shadow = build_shadow(cfg, scratch_server, migrations)
+    create_missing_schemas(cfg, shadow)
+    with tempfile.TemporaryDirectory() as temporary_dir:
+        actual_files = schema_files_in(cfg, Path(temporary_dir))
+        dump_schemas(cfg, connection, actual_files, verbose)
+        return plan_schemas(cfg, shadow, actual_files, scratch_server)
+
+
 def cmd_baseline(cfg: Config, connection: Connection, args) -> int:
     migrations = list_migrations(cfg)
     with scratch.server() as scratch_server:
         if not migrations:
-            cfg.schema_file.parent.mkdir(parents=True, exist_ok=True)
-            print(f"- dump {connection.label} -> {relative(cfg.schema_file)}")
-            pgschema_dump(cfg, connection, cfg.schema_file, args.verbose)
+            print(f"- dump {connection.label} -> {schema_files_label(cfg)}")
+            dump_schemas(cfg, connection, cfg.schema_files, args.verbose)
             baseline = generate_migration(cfg, scratch_server, "baseline", f"baseline taken from {connection.database}",
                                           args.verbose)
             if baseline is None:
@@ -156,14 +180,10 @@ def cmd_baseline(cfg: Config, connection: Connection, args) -> int:
         if applied(cfg, connection):
             sys.exit(f"{connection.label} already tracks migrations - use `pgl apply`")
         print(f"- building the state of {len(migrations)} migrations (scratch Postgres)")
-        shadow = build_shadow(cfg, scratch_server, migrations)
-        with tempfile.TemporaryDirectory() as temporary_dir:
-            actual = Path(temporary_dir) / "actual.sql"
-            pgschema_dump(cfg, connection, actual, args.verbose)
-            plan = pgschema_plan(cfg, shadow, actual, scratch_server)
-    if plan.sql:
+        plans = database_plans(cfg, connection, scratch_server, migrations, args.verbose)
+    if has_changes(plans):
         print(f"✘ {connection.label} does not match the migrations, so they cannot be recorded as already there:\n")
-        print_plan(plan, args.verbose)
+        print_plans(plans, args.verbose)
         print("\nempty database: `pgl apply` instead; otherwise align it first (see `pgl compare`)")
         return 1
     # every record in one transaction: all of them or none
@@ -240,17 +260,13 @@ def cmd_drift(cfg: Config, connection: Connection, args) -> int:
 
     with scratch.server() as scratch_server:
         print(f"- building the state of the {len(has)} migrations {connection.database} has (scratch Postgres)")
-        shadow = build_shadow(cfg, scratch_server, has)
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            actual = Path(tmp_dir) / "actual.sql"
-            pgschema_dump(cfg, connection, actual, args.verbose)
-            # "what turns the expected state into the actual database" = the manual changes
-            plan = pgschema_plan(cfg, shadow, actual, scratch_server)
-    if not plan.sql:
+        # "what turns the expected state into the actual database" = the manual changes
+        plans = database_plans(cfg, connection, scratch_server, has, args.verbose)
+    if not has_changes(plans):
         print(f"✔ {connection.label}: no drift, the database matches its migrations")
         return 0
     print(f"✘ {connection.label}: DRIFT - the database was changed outside of migrations:\n")
-    print_plan(plan, args.verbose)
+    print_plans(plans, args.verbose)
     if pending:
         print("\nrun `pgl apply` first, then keep or drop the changes:")
     print("\nkeep the changes:   pgl capture <name>")
@@ -260,15 +276,21 @@ def cmd_drift(cfg: Config, connection: Connection, args) -> int:
 
 def cmd_capture(cfg: Config, connection: Connection, args) -> None:
     require_up_to_date(cfg, connection)
-    print(f"- dump {connection.label} -> {relative(cfg.schema_file)} (manual changes become the desired state)")
-    # put back when there is nothing to capture
-    schema_before = cfg.schema_file.read_text()
-    pgschema_dump(cfg, connection, cfg.schema_file, args.verbose)
+    print(f"- dump {connection.label} -> {schema_files_label(cfg)} (manual changes become the desired state)")
+    # put back when there is nothing to capture; None for a schema file that isn't there yet
+    files_before = {}
+    for schema, schema_file in cfg.schema_files.items():
+        files_before[schema] = schema_file.read_text() if schema_file.exists() else None
+    dump_schemas(cfg, connection, cfg.schema_files, args.verbose)
     note = f"manual changes captured from {connection.database} (recorded as captured there)"
     with scratch.server() as scratch_server:
         migration = generate_migration(cfg, scratch_server, args.name, note, args.verbose)
     if migration is None:
-        cfg.schema_file.write_text(schema_before)
+        for schema, schema_file in cfg.schema_files.items():
+            if files_before[schema] is None:
+                schema_file.unlink()
+            else:
+                schema_file.write_text(files_before[schema])
         print(f"{connection.label}: no drift, nothing captured")
         return
     psql(connection, record_migration_sql(cfg, migration, "captured"))
@@ -288,7 +310,8 @@ def cmd_snapshot(cfg: Config, connection: Connection, args) -> None:
     snapshot = cfg.snapshots_dir / f"{args.name}.sql"
     print(f"- dump {connection.label} -> {relative(snapshot)}")
     started = time.monotonic()
-    pgschema_dump(cfg, connection, snapshot, args.verbose)
+    snapshot.parent.mkdir(parents=True, exist_ok=True)
+    snapshot.write_text(dump_text(cfg, connection, args.verbose))
     print(f"✔ {relative(snapshot)} written in {time.monotonic() - started:.1f} s")
 
 
@@ -310,11 +333,8 @@ def cmd_compare(cfg: Config, args) -> int:
         # no second snapshot: compare with the database itself, dumped right now
         if cfg.target is None:
             sys.exit("comparing with the database needs DATABASE_NAME in .env - or give two snapshots")
-        with tempfile.TemporaryDirectory() as temporary_dir:
-            live_dump_file = Path(temporary_dir) / "live.sql"
-            print(f"- dump {cfg.target.label}")
-            pgschema_dump(cfg, cfg.target, live_dump_file, args.verbose)
-            second_dump = live_dump_file.read_text()
+        print(f"- dump {cfg.target.label}")
+        second_dump = dump_text(cfg, cfg.target, args.verbose)
         second_label = cfg.target.label
     comparison = compare(first_dump, second_dump, args.a, second_label)
     print(comparison.report)

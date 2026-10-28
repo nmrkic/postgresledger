@@ -14,6 +14,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from . import pgschema
+from .compare import SCHEMA_MARKER
 from .config import Config, Connection, relative
 
 MIGRATION_RE = re.compile(r"^(\d{4})_([a-z0-9_]+)\.sql$")
@@ -203,10 +204,55 @@ def build_shadow(cfg: Config, scratch: Connection, migrations: list[Migration]) 
     return shadow
 
 
+def existing_schemas(cfg: Config, connection: Connection) -> list[str]:
+    """The managed schemas `connection` has, in the order of the config."""
+    # schema names are checked in config.py: lowercase letters, digits and _ only
+    quoted_names = ", ".join(f"'{schema}'" for schema in cfg.schemas)
+    found = psql(connection, f"SELECT nspname FROM pg_namespace WHERE nspname IN ({quoted_names})").splitlines()
+    return [schema for schema in cfg.schemas if schema in found]
+
+
+def create_missing_schemas(cfg: Config, scratch_database: Connection) -> list[str]:
+    """Create the managed schemas a scratch database doesn't have yet and return them.
+
+    pgschema plans only inside a schema that exists; the schemas created here are the ones
+    no migration has created yet.
+    """
+    present = existing_schemas(cfg, scratch_database)
+    missing = [schema for schema in cfg.schemas if schema not in present]
+    for schema in missing:
+        psql(scratch_database, f"CREATE SCHEMA {schema}")
+    return missing
+
+
+def schema_files_in(cfg: Config, folder: Path) -> dict[str, Path]:
+    """One <schema>.sql in `folder` for every managed schema, e.g. for dumps that are thrown away."""
+    files = {}
+    for schema in cfg.schemas:
+        files[schema] = folder / f"{schema}.sql"
+    return files
+
+
+def load_plan_database(cfg: Config, scratch: Connection, desired_files: dict[str, Path]) -> None:
+    """Recreate the plan database; with several schemas, load the desired state of all of them into it.
+
+    pgschema loads the desired state of one schema into a temporary schema of the plan database.
+    References to another schema (REFERENCES public.customer) must find that object there.
+    """
+    plan_database = reset_database(scratch, PLAN_DB)
+    if len(cfg.schemas) == 1:
+        return
+    # a function body may use a schema that is loaded after it
+    script = ["SET check_function_bodies = off;"]
+    for schema, desired in desired_files.items():
+        script.append(f"CREATE SCHEMA IF NOT EXISTS {schema};")
+        script.append(f"SET search_path TO {schema};")
+        script.append(f"\\i {desired}")
+    psql(plan_database, "\n".join(script))
+
+
 def plan_arguments(scratch: Connection) -> list[str]:
     """pgschema validates the desired state in a database on the scratch server (not its own embedded one)."""
-    if not psql(scratch, f"SELECT 1 FROM pg_database WHERE datname = '{PLAN_DB}'"):
-        psql(scratch, f'CREATE DATABASE "{PLAN_DB}"')
     return [
         "--plan-host", scratch.host,
         "--plan-port", str(scratch.port),
@@ -216,18 +262,49 @@ def plan_arguments(scratch: Connection) -> list[str]:
     ]
 
 
-def pgschema_dump(cfg: Config, connection: Connection, output_file: Path, verbose: bool = False) -> None:
-    """The schema of `connection` into `output_file`.
+def pgschema_dump(schema: str, connection: Connection, output_file: Path, verbose: bool = False) -> None:
+    """One schema of `connection` into `output_file`.
 
     With `verbose`, pgschema's debug log is shown as it happens: it says when the connection
     is being made and when it is up, so a slow connection and a slow dump can be told apart.
     """
     output_file.parent.mkdir(parents=True, exist_ok=True)
-    command = [pgschema.locate(), "dump", "--schema", cfg.schema]
+    command = [pgschema.locate(), "dump", "--schema", schema]
     if verbose:
         command.append("--debug")
     dump = run(command, connection, show_stderr=verbose).stdout
     output_file.write_text(dump)
+
+
+def dump_schemas(cfg: Config, connection: Connection, output_files: dict[str, Path], verbose: bool = False) -> None:
+    """Every managed schema of `connection` into its file in `output_files`.
+
+    A schema the database doesn't have gets an empty file: an empty schema, as pgschema
+    cannot dump a schema that doesn't exist.
+    """
+    present = existing_schemas(cfg, connection)
+    for schema, output_file in output_files.items():
+        if schema in present:
+            pgschema_dump(schema, connection, output_file, verbose)
+        else:
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            output_file.write_text("")
+
+
+def dump_text(cfg: Config, connection: Connection, verbose: bool = False) -> str:
+    """The managed schemas of `connection` as one text, for snapshots and compare.
+
+    Only `public`: the plain pgschema dump. Otherwise every schema's dump under `-- schema: <name>`.
+    """
+    with tempfile.TemporaryDirectory() as temporary_dir:
+        dump_files = schema_files_in(cfg, Path(temporary_dir))
+        dump_schemas(cfg, connection, dump_files, verbose)
+        if not cfg.names_schemas:
+            return dump_files["public"].read_text()
+        parts = []
+        for schema, dump_file in dump_files.items():
+            parts.append(f"{SCHEMA_MARKER}{schema}\n{dump_file.read_text()}")
+        return "\n".join(parts)
 
 
 # where pgschema's readable plan starts repeating the whole SQL
@@ -253,19 +330,41 @@ class Plan:
         return first_line.removeprefix("Plan:").strip().removesuffix(".")
 
 
-def print_plan(plan: Plan, verbose: bool) -> None:
-    """The changed objects, and with --verbose also the SQL."""
-    print(plan.human if verbose else plan.changes)
+def print_plans(plans: dict[str, Plan], verbose: bool) -> None:
+    """The changed objects of every schema that changes, and with --verbose also the SQL."""
+    for schema, plan in plans.items():
+        if not plan.sql:
+            continue
+        if len(plans) > 1:
+            print(f"schema {schema}:")
+        print(plan.human if verbose else plan.changes)
 
 
-def pgschema_plan(cfg: Config, connection: Connection, desired: Path, scratch: Connection) -> Plan:
-    """The plan that turns `connection` into the state from `desired`."""
+def has_changes(plans: dict[str, Plan]) -> bool:
+    """Whether any schema's plan changes something."""
+    return any(plan.sql for plan in plans.values())
+
+
+def plans_headline(plans: dict[str, Plan]) -> str:
+    """The size of the plans, e.g. "1 to add", or with several schemas "public: 1 to add, billing: 2 to add"."""
+    if len(plans) == 1:
+        only_plan = next(iter(plans.values()))
+        return only_plan.headline
+    headlines = []
+    for schema, plan in plans.items():
+        if plan.sql:
+            headlines.append(f"{schema}: {plan.headline}")
+    return ", ".join(headlines)
+
+
+def pgschema_plan(schema: str, connection: Connection, desired: Path, scratch: Connection) -> Plan:
+    """The plan that turns `schema` on `connection` into the state from `desired`."""
     with tempfile.TemporaryDirectory() as temporary_dir:
         sql_file = Path(temporary_dir) / "plan.sql"
         human_file = Path(temporary_dir) / "plan.txt"
         command = [
             pgschema.locate(), "plan",
-            "--schema", cfg.schema,
+            "--schema", schema,
             "--file", str(desired),
             "--output-sql", str(sql_file),
             "--output-human", str(human_file),
@@ -277,6 +376,37 @@ def pgschema_plan(cfg: Config, connection: Connection, desired: Path, scratch: C
         sql = sql_file.read_text() if sql_file.exists() else ""
         human = human_file.read_text() if human_file.exists() else ""
     return Plan(sql=sql.strip(), human=human.strip())
+
+
+def plan_schemas(cfg: Config, scratch_database: Connection, desired_files: dict[str, Path],
+                 scratch: Connection) -> dict[str, Plan]:
+    """For every managed schema, the plan that turns it on `scratch_database` into its desired file."""
+    load_plan_database(cfg, scratch, desired_files)
+    plans = {}
+    for schema, desired in desired_files.items():
+        plans[schema] = pgschema_plan(schema, scratch_database, desired, scratch)
+    return plans
+
+
+def migration_sql(cfg: Config, plans: dict[str, Plan], new_schemas: list[str]) -> str:
+    """The plans of every schema as the SQL of one migration, in the order of the config.
+
+    pgschema writes a schema's own objects without the schema name, so each part starts with
+    SET search_path; a schema no earlier migration has is created first.
+    """
+    if not cfg.names_schemas:
+        return plans["public"].sql
+    parts = []
+    for schema, plan in plans.items():
+        if not plan.sql:
+            continue
+        lines = [f"{SCHEMA_MARKER}{schema}"]
+        if schema in new_schemas:
+            lines.append(f"CREATE SCHEMA IF NOT EXISTS {schema};")
+        lines.append(f"SET search_path TO {schema};\n")
+        lines.append(plan.sql)
+        parts.append("\n".join(lines))
+    return "\n\n".join(parts)
 
 
 # Generating migrations
@@ -305,28 +435,33 @@ def write_migration(cfg: Config, name: str, sql: str, note: str) -> Migration:
 
 def generate_migration(cfg: Config, scratch: Connection, name: str, note: str,
                        verbose: bool = False) -> Migration | None:
-    """schema.sql vs (every migration applied) -> new migration, then check that it reproduces schema.sql.
+    """schema files vs (every migration applied) -> new migration, then check that it reproduces them.
 
     The plan is only printed with `verbose`: it is the content of the new file anyway.
     """
+    for schema, desired in cfg.schema_files.items():
+        if not desired.is_file():
+            sys.exit(f"no {relative(desired)} - the desired state of schema {schema} "
+                     "(an empty file is an empty schema)")
     existing = list_migrations(cfg)
     print(f"- building the state of {len(existing)} existing migrations (scratch Postgres)")
     shadow = build_shadow(cfg, scratch, existing)
-    plan = pgschema_plan(cfg, shadow, cfg.schema_file, scratch)
-    if not plan.sql:
+    new_schemas = create_missing_schemas(cfg, shadow)
+    plans = plan_schemas(cfg, shadow, cfg.schema_files, scratch)
+    if not has_changes(plans):
         print("no changes compared to the existing migrations")
         return None
-    migration = write_migration(cfg, name, plan.sql, note)
+    migration = write_migration(cfg, name, migration_sql(cfg, plans, new_schemas), note)
     if verbose:
-        print(plan.human)
+        print_plans(plans, verbose=True)
     print(f"- verifying {migration.path.name}")
     apply_file(cfg, shadow, migration)
     # with the new migration applied, nothing should be left to change
-    leftover = pgschema_plan(cfg, shadow, cfg.schema_file, scratch)
-    if leftover.sql:
+    leftover = plan_schemas(cfg, shadow, cfg.schema_files, scratch)
+    if has_changes(leftover):
         # always in full: this is the case to debug
-        print(leftover.human)
+        print_plans(leftover, verbose=True)
         migration.path.unlink()
-        sys.exit("after applying the migration the result still differs from schema.sql - migration deleted")
-    print(f"✔ created {relative(migration.path)} ({plan.headline})")
+        sys.exit("after applying the migration the result still differs from the schema files - migration deleted")
+    print(f"✔ created {relative(migration.path)} ({plans_headline(plans)})")
     return migration

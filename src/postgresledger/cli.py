@@ -105,7 +105,8 @@ COMMANDS = [
 
     Command(
         "migrations", "baseline", "", "snapshot the database as 0001_baseline",
-        "No migrations yet: dumps the database into schema.sql and creates 0001_baseline.sql from it, "
+        "No migrations yet: dumps the database into schema.sql (one file per schema with `schemas`) and "
+        "creates 0001_baseline.sql from it, "
         "recorded as 'baseline' (not executed). Migrations exist: an existing database that already has "
         "exactly their schema gets them recorded as 'baseline' instead of applying them; if it differs, "
         "the differences are listed and nothing is recorded."),

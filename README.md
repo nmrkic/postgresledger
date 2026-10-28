@@ -256,6 +256,48 @@ command that dumps a database (also `snapshot` and `compare`), `--verbose`
 shows pgschema's log as it connects: when a run hangs, it tells whether the
 connection or the dump is slow.
 
+## Several schemas
+
+By default `pgl` manages one schema, `public`, with its desired state in
+`schema.sql`. To manage several schemas of the same database, list them in
+`postgresledger.toml` instead of `schema` and `schema_file`:
+
+```toml
+[project]
+schemas = ["public", "billing"]
+schema_dir = "database/schema"     # public.sql, billing.sql (the default)
+```
+
+Each schema has its own file of desired state, and every command works on
+all of them: one `pgl new`, one `pgl apply`, one `pgl drift`. A migration
+covers every schema that changed, one part per schema in the order of
+`schemas`:
+
+```sql
+-- schema: public
+SET search_path TO public;
+...
+-- schema: billing
+CREATE SCHEMA IF NOT EXISTS billing;   -- only in the first migration that has billing
+SET search_path TO billing;
+...
+```
+
+pgschema writes a schema's own objects without the schema name and other
+schemas' objects with it (`REFERENCES public.customer (id)`), which is why
+each part sets `search_path`. Snapshots hold every schema too, and `compare`
+names the objects `<schema>.<name>`.
+
+List a schema after the schemas it refers to: a view in `billing` on
+`public.customer` needs `public` first. References in both directions
+between two schemas are not supported.
+
+A schema added to `schemas` that already exists in the databases with
+objects in it: `pgl capture <name>` on one of them takes it into the schema
+files and records the migration as captured there. The other databases that
+already have the schema cannot run that migration, and `pgl` has no command
+yet to record it there without running it.
+
 ## Roles and grants
 
 Roles (database users and groups) belong to the whole Postgres server and

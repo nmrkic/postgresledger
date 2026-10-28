@@ -19,7 +19,7 @@ database itself.
 
 | File | Holds | In git |
 |---|---|---|
-| `postgresledger.toml` | project settings, the same for every database: managed schema, paths, tracking schema | yes |
+| `postgresledger.toml` | project settings, the same for every database: managed schemas, paths, tracking schema | yes |
 | `.env` | `DATABASE_HOST`, `_PORT`, `_USER`, `_PASSWORD`, `_NAME`, `_SSLMODE` of the one database | no |
 | `.pgschemaignore` | what pgschema leaves out; from `pgl init`: every grant and default privilege (roles differ per database) | yes |
 
@@ -37,7 +37,7 @@ database itself.
 | `src/postgresledger/pgschema.py` | pinned pgschema version + SHA256, download into `~/.cache/postgresledger/` |
 | `tests/` | unit tests, and the full flow against the local Postgres (`make test`) |
 | `postgresledger.toml`, `.env` | this repository's settings; `.env` points at the local `dev` |
-| `database/schema/schema.sql` | desired state — the source of truth |
+| `database/schema/schema.sql` | desired state — the source of truth (with `schemas`: one `<schema>.sql` each) |
 | `database/migrations/NNNN_name.sql` | generated migrations |
 | `database/snapshots/<name>.sql` | `pgl snapshot` output, for `pgl compare` |
 | `database/seed/` | demo schema + data, loaded only into `dev` |
@@ -58,7 +58,10 @@ machine running `pgl`:
   no Unix socket, `fsync=off`; stopped and the folder deleted when the
   command ends, also on errors;
 - inside it: `shadow` (every migration applied) and `plan` (pgschema's
-  `--plan-db`, where it validates the desired state).
+  `--plan-db`, where it validates the desired state). `plan` is recreated
+  for every plan; with several schemas, the desired state of all of them is
+  loaded into it first, because pgschema loads one schema into a temporary
+  schema there and its references to other schemas must resolve.
 
 It cannot run as root (an `initdb` restriction). `apply`, `status`,
 `snapshot` and `compare` don't start it.
@@ -69,7 +72,8 @@ On the target database postgresledger creates only `<meta_schema>`.
 
 Every database has `<meta_schema>.schema_migrations`
 (`version`, `name`, `checksum`, `mode`, `applied_at`, `applied_by`). It is
-outside the managed schema (`public`), so pgschema never sees it.
+outside the managed schemas, so pgschema never sees it (`meta_schema`
+cannot be one of them).
 `meta_schema` defaults to `postgresledger`; this repository sets `pgschema_meta`,
 the name the tool used before it became a package, so the local databases
 keep their history.
@@ -82,6 +86,24 @@ keep their history.
 
 The checksum is sha256 of the file. `apply` refuses to run if an applied
 file was edited afterwards.
+
+## Schemas
+
+pgschema works on one schema per call (`--schema`). `postgresledger.toml`
+has either `schema` + `schema_file` (one schema, default `public` and
+`database/schema/schema.sql`) or `schemas` + `schema_dir` (one
+`<schema>.sql` per schema). Every dump and plan below runs once per schema,
+in the order of the config.
+
+pgschema writes a schema's own objects without the schema name and other
+schemas' objects with it. So when the schemas are anything but `public`
+alone, a migration has one part per changed schema, each starting with
+`-- schema: <name>` and `SET search_path TO <name>;`, and the first part of a
+schema no earlier migration has also creates it (`CREATE SCHEMA IF NOT
+EXISTS`, only then, since it needs the CREATE privilege on the database even
+when the schema exists). A snapshot is one dump per schema under the same
+`-- schema:` lines. A schema the database doesn't have is dumped as an empty
+file.
 
 ## Flows
 

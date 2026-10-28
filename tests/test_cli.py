@@ -91,8 +91,34 @@ def test_config_must_be_in_the_current_folder(project, monkeypatch):
 
 def test_paths_are_relative_to_the_config(project):
     cfg = Config(project / "postgresledger.toml")
-    assert cfg.schema_file == project / "database" / "schema" / "schema.sql"
+    assert cfg.schema_files == {"public": project / "database" / "schema" / "schema.sql"}
     assert cfg.meta_table == "postgresledger.schema_migrations"
+    assert not cfg.names_schemas
+
+
+def write_project_settings(project, settings: str) -> None:
+    (project / "postgresledger.toml").write_text(f"[project]\n{settings}\n")
+
+
+def test_several_schemas_get_one_file_each(project):
+    write_project_settings(project, 'schemas = ["public", "billing"]\nschema_dir = "db/schema"')
+    cfg = Config(project / "postgresledger.toml")
+    assert cfg.schemas == ["public", "billing"]
+    assert cfg.schema_files["billing"] == project / "db" / "schema" / "billing.sql"
+    assert cfg.names_schemas
+
+
+@pytest.mark.parametrize("settings", [
+    'schemas = ["public", "billing"]\nschema = "public"',  # both ways at once
+    "schemas = []",
+    'schemas = ["public", "public"]',
+    'schemas = ["public", "Billing"]',  # would need quoting in SQL
+    'schemas = ["public", "postgresledger"]',  # the tracking schema
+])
+def test_invalid_schemas_are_refused(project, settings):
+    write_project_settings(project, settings)
+    with pytest.raises(SystemExit):
+        Config(project / "postgresledger.toml")
 
 
 def test_database_from_env_file_and_environment(project, monkeypatch):
@@ -175,6 +201,15 @@ def test_compare_reports_each_kind_of_difference():
     assert "only in prod (1):" in report and "orders" in report
     assert "different (1):" in report and "+    email text" in report
     assert compare(DUMP_A, DUMP_A, "a", "b").difference_count == 0
+
+
+def test_objects_of_several_schemas_are_named_with_their_schema():
+    # the same table name in two schemas is two objects, and no object runs into the next schema
+    snapshot = f"-- schema: public\n{DUMP_A}\n-- schema: billing\n{DUMP_A}"
+    found = objects(snapshot)
+    assert set(found) == {SchemaObject("TABLE", "public.customer"), SchemaObject("INDEX", "public.customer_name_idx"),
+                          SchemaObject("TABLE", "billing.customer"), SchemaObject("INDEX", "billing.customer_name_idx")}
+    assert found[SchemaObject("INDEX", "public.customer_name_idx")] == "CREATE INDEX customer_name_idx ON customer (name);"
 
 
 PLAN_HUMAN = """Plan: 2 to add.
