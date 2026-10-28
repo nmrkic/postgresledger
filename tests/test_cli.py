@@ -64,6 +64,19 @@ def test_init_keeps_existing_env_and_gitignore(tmp_path, monkeypatch):
     assert (tmp_path / ".gitignore").read_text() == "node_modules/\n.env\n"
 
 
+def test_init_leaves_grants_out_with_pgschemaignore(project):
+    ignore = tomllib.loads((project / ".pgschemaignore").read_text())
+    assert ignore["privileges"]["patterns"] == ["*"]
+    assert ignore["default_privileges"]["patterns"] == ["*"]
+
+
+def test_init_keeps_an_existing_pgschemaignore(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".pgschemaignore").write_text('[tables]\npatterns = ["temp_*"]\n')
+    run("init", "--no-setup")
+    assert (tmp_path / ".pgschemaignore").read_text() == '[tables]\npatterns = ["temp_*"]\n'
+
+
 def test_init_refuses_to_overwrite(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "postgresledger.toml").write_text("x")
@@ -200,8 +213,19 @@ def test_verbose_only_on_commands_with_a_plan():
         assert not main_parser.parse_args([command]).verbose
     assert main_parser.parse_args(["new", "add_email", "-v"]).verbose
     assert main_parser.parse_args(["capture", "orders_notes", "-v"]).verbose
+    assert main_parser.parse_args(["snapshot", "prod", "--verbose"]).verbose
+    assert main_parser.parse_args(["compare", "prod", "-v"]).verbose
     with pytest.raises(SystemExit):
         main_parser.parse_args(["status", "--verbose"])
+
+
+def test_ctrl_c_exits_without_a_traceback(monkeypatch, capsys):
+    def interrupted_command(argv):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "run_command", interrupted_command)
+    assert run("snapshot", "prod") == 130
+    assert capsys.readouterr().err.strip() == "interrupted"
 
 
 def test_every_command_is_there():

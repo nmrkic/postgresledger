@@ -23,16 +23,26 @@ SHADOW_DB = "shadow"
 PLAN_DB = "plan"
 
 
-def run(command: list[str], connection: Connection, *, stdin: str | None = None) -> subprocess.CompletedProcess:
-    """Run psql or pgschema against `connection`; if it fails, show its output and stop pgl."""
+def run(command: list[str], connection: Connection, *, stdin: str | None = None,
+        show_stderr: bool = False) -> subprocess.CompletedProcess:
+    """Run psql or pgschema against `connection`; if it fails, show its output and stop pgl.
+
+    With `show_stderr` the program's log goes straight to the terminal while it runs
+    (only stdout is captured), e.g. pgschema --debug.
+    """
     # the shell environment (PATH, HOME, ...) plus the PG* variables of this connection
     environment = {**os.environ, **connection.environment()}
     program = Path(command[0]).name
+    stderr = None if show_stderr else subprocess.PIPE
+    if show_stderr:
+        # pgl's own lines first: when stdout is a pipe (CI, | less) Python would print them later
+        sys.stdout.flush()
     try:
-        return subprocess.run(command, input=stdin, env=environment, text=True, capture_output=True, check=True)
+        return subprocess.run(command, input=stdin, env=environment, text=True,
+                              stdout=subprocess.PIPE, stderr=stderr, check=True)
     except subprocess.CalledProcessError as error:
-        # the program ran and failed: its own output says why
-        program_output = (error.stdout + error.stderr).strip()
+        # the program ran and failed: its own output says why (stderr is None when already shown)
+        program_output = (error.stdout + (error.stderr or "")).strip()
         sys.exit(f"{program} failed on {connection.label}:\n{program_output}")
     except OSError as error:
         # the program could not run at all, e.g. psql is not installed
@@ -206,9 +216,17 @@ def plan_arguments(scratch: Connection) -> list[str]:
     ]
 
 
-def pgschema_dump(cfg: Config, connection: Connection, output_file: Path) -> None:
+def pgschema_dump(cfg: Config, connection: Connection, output_file: Path, verbose: bool = False) -> None:
+    """The schema of `connection` into `output_file`.
+
+    With `verbose`, pgschema's debug log is shown as it happens: it says when the connection
+    is being made and when it is up, so a slow connection and a slow dump can be told apart.
+    """
     output_file.parent.mkdir(parents=True, exist_ok=True)
-    dump = run([pgschema.locate(), "dump", "--schema", cfg.schema], connection).stdout
+    command = [pgschema.locate(), "dump", "--schema", cfg.schema]
+    if verbose:
+        command.append("--debug")
+    dump = run(command, connection, show_stderr=verbose).stdout
     output_file.write_text(dump)
 
 

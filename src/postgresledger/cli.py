@@ -17,8 +17,9 @@ NO_CONFIG = {"init", "setup"}
 # commands that read the project but never touch a database
 # (compare with two snapshots; compare with one checks DATABASE_NAME itself)
 NO_DATABASE = {"new", "compare"}
-# commands that make a pgschema plan; --verbose prints all of it, SQL included
-VERBOSE = {"baseline", "new", "drift", "capture"}
+# commands that dump a database or make a pgschema plan; --verbose shows pgschema's
+# debug log while it dumps and the whole plan, SQL included
+VERBOSE = {"baseline", "new", "drift", "capture", "snapshot", "compare"}
 
 INTRO = """\
 Versioned PostgreSQL migrations from plain SQL, without an ORM.
@@ -64,7 +65,8 @@ def add_apply_arguments(command_parser: argparse.ArgumentParser) -> None:
 
 def add_verbose_argument(command_parser: argparse.ArgumentParser) -> None:
     command_parser.add_argument("-v", "--verbose", action="store_true",
-                                help="print pgschema's whole plan, including the SQL")
+                                help="show pgschema's debug log while it dumps the database, "
+                                     "and its whole plan including the SQL")
 
 
 def add_snapshot_arguments(command_parser: argparse.ArgumentParser) -> None:
@@ -92,7 +94,8 @@ COMMANDS = [
     Command(
         "setup", "init", "[--dir D]", "create postgresledger.toml, .env and folders",
         "Creates postgresledger.toml (project settings, committed) and .env with DATABASE_* (never committed, "
-        "added to .gitignore) in the current folder, plus <dir>/schema/ and <dir>/migrations/, then runs setup.",
+        "added to .gitignore) in the current folder, plus <dir>/schema/ and <dir>/migrations/, then runs setup. "
+        "Also .pgschemaignore, which keeps grants out of the migrations (delete it to keep them).",
         add_init_arguments),
     Command(
         "setup", "setup", "", "download pgschema + scratch Postgres, check psql",
@@ -193,6 +196,16 @@ def parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> None:
+    try:
+        run_command(argv)
+    except KeyboardInterrupt:
+        # Ctrl+C: psql / pgschema got it as well and stopped, the scratch Postgres is cleaned up;
+        # a Python traceback would only hide that
+        print("\ninterrupted", file=sys.stderr)
+        sys.exit(130)
+
+
+def run_command(argv: list[str] | None) -> None:
     args = parser().parse_args(argv)
     if args.cmd in NO_CONFIG:
         sys.exit(args.fn(args) or 0)

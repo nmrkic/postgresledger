@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from . import pgschema, scratch
@@ -54,6 +55,30 @@ DATABASE_NAME={database}
 """
 
 
+PGSCHEMA_IGNORE_NAME = ".pgschemaignore"
+
+# what `pgl init` writes to .pgschemaignore
+PGSCHEMA_IGNORE_TEXT = """\
+# Read by pgschema on every pgl command run from this folder. Committed to git.
+#
+# Grants and default privileges are left out of schema.sql, the migrations and
+# the snapshots: roles usually differ between databases (and pgschema never
+# creates them), so a GRANT to a missing role would make `pgl apply` fail, and
+# per-database grants would show up as drift. Manage them outside migrations.
+#
+# The patterns are names of the roles that receive the grants:
+#   ["*", "!app_reader"]   keep only the grants to app_reader
+#   ["cloudsql*"]          leave out only the grants to cloudsql* roles
+# Delete this file to keep every grant in the migrations.
+
+[privileges]
+patterns = ["*"]
+
+[default_privileges]
+patterns = ["*"]
+"""
+
+
 def database_name_from_folder(folder_name: str) -> str:
     """The project folder name as a database name: lowercase letters, digits and _ ("My-App" -> "my_app")."""
     allowed_characters = "abcdefghijklmnopqrstuvwxyz0123456789_"
@@ -82,6 +107,12 @@ def cmd_init(args) -> int:
     if not dotenv_file.exists():
         dotenv_file.write_text(dotenv_file_text(database_name_from_folder(root.name)))
         created.append(".env")
+
+    # an existing file is the project's own choice: keep it
+    pgschema_ignore = root / PGSCHEMA_IGNORE_NAME
+    if not pgschema_ignore.exists():
+        pgschema_ignore.write_text(PGSCHEMA_IGNORE_TEXT)
+        created.append(f"{PGSCHEMA_IGNORE_NAME} (no grants)")
 
     gitignore = root / ".gitignore"
     ignored = gitignore.read_text().splitlines() if gitignore.exists() else []
@@ -112,7 +143,7 @@ def cmd_baseline(cfg: Config, connection: Connection, args) -> int:
         if not migrations:
             cfg.schema_file.parent.mkdir(parents=True, exist_ok=True)
             print(f"- dump {connection.label} -> {relative(cfg.schema_file)}")
-            pgschema_dump(cfg, connection, cfg.schema_file)
+            pgschema_dump(cfg, connection, cfg.schema_file, args.verbose)
             baseline = generate_migration(cfg, scratch_server, "baseline", f"baseline taken from {connection.database}",
                                           args.verbose)
             if baseline is None:
@@ -128,7 +159,7 @@ def cmd_baseline(cfg: Config, connection: Connection, args) -> int:
         shadow = build_shadow(cfg, scratch_server, migrations)
         with tempfile.TemporaryDirectory() as temporary_dir:
             actual = Path(temporary_dir) / "actual.sql"
-            pgschema_dump(cfg, connection, actual)
+            pgschema_dump(cfg, connection, actual, args.verbose)
             plan = pgschema_plan(cfg, shadow, actual, scratch_server)
     if plan.sql:
         print(f"✘ {connection.label} does not match the migrations, so they cannot be recorded as already there:\n")
@@ -212,7 +243,7 @@ def cmd_drift(cfg: Config, connection: Connection, args) -> int:
         shadow = build_shadow(cfg, scratch_server, has)
         with tempfile.TemporaryDirectory() as tmp_dir:
             actual = Path(tmp_dir) / "actual.sql"
-            pgschema_dump(cfg, connection, actual)
+            pgschema_dump(cfg, connection, actual, args.verbose)
             # "what turns the expected state into the actual database" = the manual changes
             plan = pgschema_plan(cfg, shadow, actual, scratch_server)
     if not plan.sql:
@@ -232,7 +263,7 @@ def cmd_capture(cfg: Config, connection: Connection, args) -> None:
     print(f"- dump {connection.label} -> {relative(cfg.schema_file)} (manual changes become the desired state)")
     # put back when there is nothing to capture
     schema_before = cfg.schema_file.read_text()
-    pgschema_dump(cfg, connection, cfg.schema_file)
+    pgschema_dump(cfg, connection, cfg.schema_file, args.verbose)
     note = f"manual changes captured from {connection.database} (recorded as captured there)"
     with scratch.server() as scratch_server:
         migration = generate_migration(cfg, scratch_server, args.name, note, args.verbose)
@@ -255,8 +286,10 @@ def cmd_snapshot(cfg: Config, connection: Connection, args) -> None:
     if not is_valid_snapshot_name(args.name):
         sys.exit("snapshot name: letters, digits, _ . - only")
     snapshot = cfg.snapshots_dir / f"{args.name}.sql"
-    pgschema_dump(cfg, connection, snapshot)
-    print(f"✔ {connection.label} -> {relative(snapshot)}")
+    print(f"- dump {connection.label} -> {relative(snapshot)}")
+    started = time.monotonic()
+    pgschema_dump(cfg, connection, snapshot, args.verbose)
+    print(f"✔ {relative(snapshot)} written in {time.monotonic() - started:.1f} s")
 
 
 def snapshot_file(cfg: Config, name_or_path: str) -> Path:
@@ -279,7 +312,8 @@ def cmd_compare(cfg: Config, args) -> int:
             sys.exit("comparing with the database needs DATABASE_NAME in .env - or give two snapshots")
         with tempfile.TemporaryDirectory() as temporary_dir:
             live_dump_file = Path(temporary_dir) / "live.sql"
-            pgschema_dump(cfg, cfg.target, live_dump_file)
+            print(f"- dump {cfg.target.label}")
+            pgschema_dump(cfg, cfg.target, live_dump_file, args.verbose)
             second_dump = live_dump_file.read_text()
         second_label = cfg.target.label
     comparison = compare(first_dump, second_dump, args.a, second_label)

@@ -251,7 +251,38 @@ environment; a variable set there wins over `.env`. `pgl --env-file .env.uat …
 Run `pgl` in the folder with `postgresledger.toml`, or point to it with
 `--config PATH`. `pgl <command> -h` describes each command.
 `baseline`, `new`, `capture` and `drift` print only what changed;
-`--verbose` (`-v`) prints pgschema's whole plan, SQL included.
+`--verbose` (`-v`) prints pgschema's whole plan, SQL included. On every
+command that dumps a database (also `snapshot` and `compare`), `--verbose`
+shows pgschema's log as it connects: when a run hangs, it tells whether the
+connection or the dump is slow.
+
+## Roles and grants
+
+Roles (database users and groups) belong to the whole Postgres server and
+usually differ between databases: other users on dev and prod, the roles a
+managed database adds. pgschema never creates them. If grants were part of
+the migrations, `pgl apply` would fail on a database without one of the
+roles, and grants that differ on purpose would show up in `drift` and
+`compare`.
+
+So `pgl init` writes a `.pgschemaignore` next to `postgresledger.toml` that
+leaves every grant and default privilege out of `schema.sql`, the migrations
+and the snapshots:
+
+```toml
+[privileges]
+patterns = ["*"]
+
+[default_privileges]
+patterns = ["*"]
+```
+
+The patterns are the names of the roles that receive the grants:
+`["*", "!app_reader"]` keeps only the grants to `app_reader`, `["cloudsql*"]`
+leaves out only the grants to `cloudsql*` roles. Delete the file to keep
+every grant in the migrations. pgschema reads it from the folder `pgl` runs in,
+on every command; more in the
+[pgschema docs](https://www.pgschema.com/cli/ignore).
 
 ## Developing postgresledger
 

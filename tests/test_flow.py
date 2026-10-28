@@ -19,6 +19,7 @@ from postgresledger import pgschema, scratch
 PORT = os.environ.get("PGL_TEST_PORT", "55432")
 ENV = dict(os.environ, PGHOST="localhost", PGPORT=PORT, PGUSER="postgres", PGPASSWORD="postgres")
 DBS = ["pgltest_dev", "pgltest_uat", "pgltest_prod"]
+READER_ROLE = "pgltest_reader"
 
 
 def sql(db: str, statement: str) -> str:
@@ -42,12 +43,16 @@ def project(tmp_path, monkeypatch):
     for db in DBS:
         sql("postgres", f"DROP DATABASE IF EXISTS {db} WITH (FORCE)")
         sql("postgres", f"CREATE DATABASE {db}")
+    # roles belong to the whole server: one for the grants test, dropped again below
+    sql("postgres", f"DROP ROLE IF EXISTS {READER_ROLE}")
+    sql("postgres", f"CREATE ROLE {READER_ROLE}")
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("PGL_CONFIG", raising=False)
     assert run("init", "--no-setup") == 0
     yield tmp_path
     for db in DBS:
         sql("postgres", f"DROP DATABASE IF EXISTS {db} WITH (FORCE)")
+    sql("postgres", f"DROP ROLE IF EXISTS {READER_ROLE}")
 
 
 def use(monkeypatch, db: str) -> None:
@@ -63,18 +68,22 @@ def databases() -> set[str]:
     return set(sql("postgres", "SELECT datname FROM pg_database").splitlines())
 
 
-def test_full_flow(project, monkeypatch, capsys):
+def test_full_flow(project, monkeypatch, capfd):
     schema = project / "database" / "schema" / "schema.sql"
     migrations = project / "database" / "migrations"
     before = databases()
 
     # an existing database becomes the baseline; prod is built from it
     sql("pgltest_dev", "CREATE TABLE customer (id int PRIMARY KEY, name text NOT NULL)")
+    sql("pgltest_dev", f"ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO {READER_ROLE}")
     use(monkeypatch, "pgltest_dev")
     assert run("baseline") == 0
     assert (migrations / "0001_baseline.sql").exists()
+    # the .pgschemaignore from `pgl init` keeps grants out of the migrations
+    assert READER_ROLE not in (migrations / "0001_baseline.sql").read_text()
+    assert READER_ROLE not in schema.read_text()
     # the SQL is in the file; only --verbose prints it
-    output = capsys.readouterr().out
+    output = capfd.readouterr().out
     assert "CREATE TABLE" not in output and "0001_baseline.sql (1 to add)" in output
     assert sql("pgltest_dev", "SELECT mode FROM postgresledger.schema_migrations") == "baseline"
     use(monkeypatch, "pgltest_prod")
@@ -104,7 +113,13 @@ def test_full_flow(project, monkeypatch, capsys):
     assert run("drift") == 1
     assert run("snapshot", "prod") == 0
     use(monkeypatch, "pgltest_uat")
+    capfd.readouterr()
     assert run("snapshot", "uat") == 0
+    quiet = capfd.readouterr()
+    assert "uat.sql written in" in quiet.out and "level=DEBUG" not in quiet.err
+    # --verbose: pgschema's debug log, shown while it runs (it is a separate process, hence capfd)
+    assert run("snapshot", "uat", "--verbose") == 0
+    assert "Database connection established" in capfd.readouterr().err
     assert run("compare", "uat", "prod") == 1
     assert run("compare", "uat") == 0  # uat snapshot vs uat itself
     use(monkeypatch, "pgltest_prod")

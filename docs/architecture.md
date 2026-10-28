@@ -21,6 +21,7 @@ database itself.
 |---|---|---|
 | `postgresledger.toml` | project settings, the same for every database: managed schema, paths, tracking schema | yes |
 | `.env` | `DATABASE_HOST`, `_PORT`, `_USER`, `_PASSWORD`, `_NAME`, `_SSLMODE` of the one database | no |
+| `.pgschemaignore` | what pgschema leaves out; from `pgl init`: every grant and default privilege (roles differ per database) | yes |
 
 ## Layout
 
@@ -28,7 +29,7 @@ database itself.
 |---|---|
 | `pyproject.toml` | package `postgresledger`, commands `pgl` and `postgresledger` (uv_build) |
 | `src/postgresledger/cli.py` | argument parsing and the help text, one list of commands |
-| `src/postgresledger/commands.py` | the commands, including `init` and its `postgresledger.toml` / `.env` templates |
+| `src/postgresledger/commands.py` | the commands, including `init` and its `postgresledger.toml` / `.env` / `.pgschemaignore` templates |
 | `src/postgresledger/core.py` | psql / pgschema calls, migration files, shadow database, tracking table |
 | `src/postgresledger/config.py` | `postgresledger.toml` loading, the `DATABASE_*` variables from `.env` or the environment |
 | `src/postgresledger/scratch.py` | the throwaway Postgres: pinned build, download, start / stop per command |
