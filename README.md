@@ -205,7 +205,7 @@ pgl --version
 
 Supported: Linux and macOS, amd64 and arm64. The scratch Postgres cannot
 run as root (run `pgl` as a normal user, also in CI containers). To bump
-pgschema or the scratch Postgres, change `VERSION` and the hashes in
+pgschema or the scratch Postgres, change `VERSION` / `VERSIONS` and the hashes in
 `src/postgresledger/pgschema.py` / `src/postgresledger/scratch.py`.
 
 ## Usage

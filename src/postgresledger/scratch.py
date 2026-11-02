@@ -29,13 +29,23 @@ from pathlib import Path
 from .config import Connection
 from .pgschema import cache_dir, sha256
 
-VERSION = "17.11.0"
-# sha256 of the jars, per platform (cross-checked with Maven Central's .sha1)
+# the pinned build per Postgres major version; the project picks one with `postgres_version`
+VERSIONS = {"14": "14.24.0", "17": "17.11.0"}
+DEFAULT_MAJOR = "17"
+# sha256 of the jars, per version and platform (cross-checked with Maven Central's .sha1)
 SHA256 = {
-    "linux-amd64": "0dd7b72b6f335b8ecfb355fa24c5781e8a93edd09880bb77eb52ebbf29b3e96d",
-    "linux-arm64v8": "8b042e0ea418b1927d95399207950da0734d27fe01e29503ade3bdc464ad4c2b",
-    "darwin-amd64": "d464ff178e9860ba204662ac23fa547504b7fd392392ff2fb92e3fd73b5bdb64",
-    "darwin-arm64v8": "a1c2786acb0c398f9b2d76806fc52f5dc8b222cbc8e9383a9b9702084daaf3a5",
+    "14.24.0": {
+        "linux-amd64": "2722d05eb22c671104c9918d59d8ba9f5656898f5452a0207bb4cce21eef5dc4",
+        "linux-arm64v8": "8a19b9dd0fb3cd00080e17d51ac14b5d055f352ee00568bc8c4cb3bf475b6830",
+        "darwin-amd64": "08cfdc5ea99d02d7e3627df9b4c8eabe13920471c59fb7c8f9805b918921c055",
+        "darwin-arm64v8": "395e93c87bdf7ad873d44d9db4a70f78a96e30d0a6df3bf44f70c6667c431eac",
+    },
+    "17.11.0": {
+        "linux-amd64": "0dd7b72b6f335b8ecfb355fa24c5781e8a93edd09880bb77eb52ebbf29b3e96d",
+        "linux-arm64v8": "8b042e0ea418b1927d95399207950da0734d27fe01e29503ade3bdc464ad4c2b",
+        "darwin-amd64": "d464ff178e9860ba204662ac23fa547504b7fd392392ff2fb92e3fd73b5bdb64",
+        "darwin-arm64v8": "a1c2786acb0c398f9b2d76806fc52f5dc8b222cbc8e9383a9b9702084daaf3a5",
+    },
 }
 # <os>-<arch> -> the name of the Maven Central build
 BUILD = {
@@ -47,8 +57,8 @@ BUILD = {
 ARCH = {"x86_64": "amd64", "amd64": "amd64", "aarch64": "arm64", "arm64": "arm64"}
 
 
-def install_dir() -> Path:
-    return cache_dir() / f"postgres-{VERSION}"
+def install_dir(major: str = DEFAULT_MAJOR) -> Path:
+    return cache_dir() / f"postgres-{VERSIONS[major]}"
 
 
 def target() -> str:
@@ -61,15 +71,16 @@ def target() -> str:
     return BUILD[platform_name]
 
 
-def install() -> Path:
-    """Download and unpack the pinned Postgres server unless it is already there."""
-    destination = install_dir()
+def install(major: str = DEFAULT_MAJOR) -> Path:
+    """Download and unpack the pinned Postgres server of this major version unless it is already there."""
+    version = VERSIONS[major]
+    destination = install_dir(major)
     if (destination / "bin" / "pg_ctl").exists():
-        print(f"ok       Postgres {VERSION} (scratch server) already in {destination}")
+        print(f"ok       Postgres {version} (scratch server) already in {destination}")
         return destination
     build = target()
-    url = (f"https://repo1.maven.org/maven2/io/zonky/test/postgres/embedded-postgres-binaries-{build}/{VERSION}/"
-           f"embedded-postgres-binaries-{build}-{VERSION}.jar")
+    url = (f"https://repo1.maven.org/maven2/io/zonky/test/postgres/embedded-postgres-binaries-{build}/{version}/"
+           f"embedded-postgres-binaries-{build}-{version}.jar")
     print(f"download {url}")
     with urllib.request.urlopen(url) as response:
         jar = response.read()
@@ -77,7 +88,7 @@ def install() -> Path:
         jar_file.write(jar)
         jar_file.flush()
         actual_checksum = sha256(Path(jar_file.name))
-    expected_checksum = SHA256[build]
+    expected_checksum = SHA256[version][build]
     if actual_checksum != expected_checksum:
         sys.exit(f"Postgres checksum mismatch: expected {expected_checksum}, got {actual_checksum}")
 
@@ -95,7 +106,7 @@ def install() -> Path:
         else:
             tar.extractall(partial_destination)
     partial_destination.replace(destination)
-    print(f"ok       Postgres {VERSION} (scratch server) -> {destination}")
+    print(f"ok       Postgres {version} (scratch server) -> {destination}")
     return destination
 
 
@@ -121,11 +132,11 @@ def run_server_program(command: list[str]) -> None:
 
 
 @contextmanager
-def server() -> Iterator[Connection]:
+def server(major: str = DEFAULT_MAJOR) -> Iterator[Connection]:
     """Start a throwaway Postgres, yield a connection to its `postgres` database, delete it afterwards."""
-    bin_dir = install_dir() / "bin"
+    bin_dir = install_dir(major) / "bin"
     if not (bin_dir / "pg_ctl").exists():
-        sys.exit("the scratch Postgres is not installed - run `pgl setup`")
+        sys.exit(f"the scratch Postgres {major} is not installed - run `pgl setup`")
     if hasattr(os, "geteuid") and os.geteuid() == 0:
         sys.exit("the scratch Postgres cannot run as root - run pgl as a normal user")
     with tempfile.TemporaryDirectory(prefix="postgresledger-") as temporary_dir:

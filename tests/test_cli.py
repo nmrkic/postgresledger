@@ -326,3 +326,12 @@ def test_a_migration_that_fails_on_the_shadow_is_deleted(project, monkeypatch):
     with pytest.raises(SystemExit):
         core.generate_migration(cfg, None, "broken", "")
     assert list_migrations(cfg) == []
+
+
+def test_postgres_version_defaults_to_17_and_is_checked(project):
+    assert Config(project / "postgresledger.toml").postgres_version == "17"
+    write_project_settings(project, "postgres_version = 14")
+    assert Config(project / "postgresledger.toml").postgres_version == "14"
+    write_project_settings(project, 'postgres_version = "15"')
+    with pytest.raises(SystemExit):
+        Config(project / "postgresledger.toml")

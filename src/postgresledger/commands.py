@@ -51,6 +51,7 @@ schema_file = "{folder}/schema/schema.sql"          # desired state, the source 
 migrations_dir = "{folder}/migrations"
 snapshots_dir = "{folder}/snapshots"                # pgl snapshot <name> writes here
 meta_schema = "postgresledger"                         # tracking table: <meta_schema>.schema_migrations
+postgres_version = "17"                                # scratch Postgres: the major version your databases run (14 or 17)
 """
 
 
@@ -166,7 +167,7 @@ def database_plans(cfg: Config, connection: Connection, scratch_server: Connecti
 
 def cmd_baseline(cfg: Config, connection: Connection, args) -> int:
     migrations = list_migrations(cfg)
-    with scratch.server() as scratch_server:
+    with scratch.server(cfg.postgres_version) as scratch_server:
         if not migrations:
             print(f"- dump {connection.label} -> {schema_files_label(cfg)}")
             dump_schemas(cfg, connection, cfg.schema_files, args.verbose)
@@ -196,7 +197,7 @@ def cmd_baseline(cfg: Config, connection: Connection, args) -> int:
 
 
 def cmd_new(cfg: Config, args) -> None:
-    with scratch.server() as scratch_server:
+    with scratch.server(cfg.postgres_version) as scratch_server:
         generate_migration(cfg, scratch_server, args.name, args.note or "change in schema.sql", args.verbose)
 
 
@@ -260,7 +261,7 @@ def cmd_drift(cfg: Config, connection: Connection, args) -> int:
         print(f"! {connection.label} does not have {len(pending)} migration(s) yet: {names} - `pgl apply`")
         print(f"  comparing with the {len(has)} it has, so these are not counted as drift")
 
-    with scratch.server() as scratch_server:
+    with scratch.server(cfg.postgres_version) as scratch_server:
         print(f"- building the state of the {len(has)} migrations {connection.database} has (scratch Postgres)")
         # "what turns the expected state into the actual database" = the manual changes
         plans = database_plans(cfg, connection, scratch_server, has, args.verbose)
@@ -285,7 +286,7 @@ def cmd_capture(cfg: Config, connection: Connection, args) -> None:
         files_before[schema] = schema_file.read_text() if schema_file.exists() else None
     dump_schemas(cfg, connection, cfg.schema_files, args.verbose)
     note = f"manual changes captured from {connection.database} (recorded as captured there)"
-    with scratch.server() as scratch_server:
+    with scratch.server(cfg.postgres_version) as scratch_server:
         migration = generate_migration(cfg, scratch_server, args.name, note, args.verbose)
     if migration is None:
         for schema, schema_file in cfg.schema_files.items():

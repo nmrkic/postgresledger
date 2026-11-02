@@ -13,6 +13,9 @@ from dotenv import load_dotenv
 
 CONFIG_NAME = "postgresledger.toml"
 DEFAULT_META_SCHEMA = "postgresledger"
+# the major versions scratch.py has a pinned build for
+SUPPORTED_POSTGRES_VERSIONS = ("14", "17")
+DEFAULT_POSTGRES_VERSION = "17"
 
 
 @dataclass(frozen=True)
@@ -62,6 +65,12 @@ class Config:
         self.migrations_dir = self.root / project.get("migrations_dir", "database/migrations")
         self.snapshots_dir = self.root / project.get("snapshots_dir", "database/snapshots")
         self.meta_schema = project.get("meta_schema", DEFAULT_META_SCHEMA)
+        # the major version of the scratch Postgres: the one the databases run, so a migration
+        # verified there also runs on them
+        self.postgres_version = str(project.get("postgres_version", DEFAULT_POSTGRES_VERSION))
+        if self.postgres_version not in SUPPORTED_POSTGRES_VERSIONS:
+            sys.exit(f"{CONFIG_NAME}: postgres_version {self.postgres_version} - supported: "
+                     + ", ".join(SUPPORTED_POSTGRES_VERSIONS))
         self.meta_table = f"{self.meta_schema}.schema_migrations"
         if self.meta_schema in self.schemas:
             sys.exit(f"{CONFIG_NAME}: meta_schema '{self.meta_schema}' is for the tracking table only, "

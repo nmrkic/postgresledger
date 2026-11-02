@@ -102,11 +102,16 @@ def check_tool(name: str, version_arguments: list[str], hint: str, required: boo
 
 
 def setup() -> int:
-    """Download pgschema and the scratch Postgres, check the other tools postgresledger needs."""
+    """Download pgschema and the scratch Postgres, check the other tools postgresledger needs.
+
+    The scratch Postgres is the version of the postgresledger.toml in the current folder, if there is one.
+    """
     from . import scratch
+    from .config import CONFIG_NAME, Config
 
     print(f"ok       Python {platform.python_version()}")
     install()
-    scratch.install()
+    major = Config(Path(CONFIG_NAME)).postgres_version if Path(CONFIG_NAME).is_file() else scratch.DEFAULT_MAJOR
+    scratch.install(major)
     psql_found = check_tool("psql", ["--version"], "install the PostgreSQL client (postgresql-client / libpq)")
     return 0 if psql_found else 1
