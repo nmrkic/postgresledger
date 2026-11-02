@@ -307,3 +307,22 @@ def test_compare_data_numeric_keys_sort_numerically():
     second = {"tables": {"t": {"key": "id", "rows": []}}, "missing": [], "unregistered": []}
     [table] = compare_data(first, second, "a", "b", []).tables
     assert [row["id"] for row in table.only_in_first] == [9, 10, 100]
+
+
+def test_a_migration_that_fails_on_the_shadow_is_deleted(project, monkeypatch):
+    from postgresledger import core
+
+    cfg = Config(project / "postgresledger.toml")
+    for desired in cfg.schema_files.values():
+        desired.write_text("")
+    monkeypatch.setattr(core, "build_shadow", lambda *args: None)
+    monkeypatch.setattr(core, "create_missing_schemas", lambda *args: [])
+    monkeypatch.setattr(core, "plan_schemas", lambda *args: {"public": Plan("ALTER TABLE x;", "Plan: 1 to modify.")})
+
+    def fail(*args, **kwargs):
+        raise SystemExit("psql failed")
+
+    monkeypatch.setattr(core, "apply_file", fail)
+    with pytest.raises(SystemExit):
+        core.generate_migration(cfg, None, "broken", "")
+    assert list_migrations(cfg) == []

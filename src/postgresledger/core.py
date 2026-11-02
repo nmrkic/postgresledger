@@ -455,7 +455,13 @@ def generate_migration(cfg: Config, scratch: Connection, name: str, note: str,
     if verbose:
         print_plans(plans, verbose=True)
     print(f"- verifying {migration.path.name}")
-    apply_file(cfg, shadow, migration)
+    try:
+        apply_file(cfg, shadow, migration)
+    except SystemExit:
+        # a file that fails on the shadow would break the next `pgl new` too
+        migration.path.unlink()
+        print(f"migration {migration.path.name} deleted", file=sys.stderr)
+        raise
     # with the new migration applied, nothing should be left to change
     leftover = plan_schemas(cfg, shadow, cfg.schema_files, scratch)
     if has_changes(leftover):
