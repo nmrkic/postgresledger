@@ -403,3 +403,12 @@ def test_report_shows_each_difference_once_with_its_decision(project, capsys):
     assert "| TABLE orders | missing | missing | A | prod: in-flight PROJ-7 |" in report
     assert "| INDEX customer_name_idx | A | A | missing | uat: accepted |" in report
     assert "3 difference(s), 1 undecided" in report
+
+
+def test_hand_written_migrations_with_a_timestamp_and_ticket(project):
+    migrations = project / "database" / "migrations"
+    (migrations / "20261103_0900__PROJ-2_add_index.sql").write_text("")
+    (migrations / "20261102_1405__PROJ-1_add_email.sql").write_text("")
+    found = list_migrations(Config(project / "postgresledger.toml"))
+    assert [(migration.version, migration.name) for migration in found] == [
+        ("20261102_1405", "PROJ-1_add_email"), ("20261103_0900", "PROJ-2_add_index")]

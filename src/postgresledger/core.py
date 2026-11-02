@@ -17,7 +17,8 @@ from . import pgschema
 from .compare import SCHEMA_MARKER
 from .config import Config, Connection, relative
 
-MIGRATION_RE = re.compile(r"^(\d{4})_([a-z0-9_]+)\.sql$")
+# 0001_name.sql, or <yyyyMMdd_HHmm>__<TICKET>_<name>.sql when files are written by hand on several branches
+MIGRATION_RE = re.compile(r"^(\d{4}|\d{8}_\d{4})__?([A-Za-z0-9_-]+)\.sql$")
 ADVISORY_LOCK_KEY = 727274  # same key everywhere -> two applies on one database never run in parallel
 # databases on the scratch server only
 SHADOW_DB = "shadow"
@@ -141,7 +142,7 @@ def record_migration_sql(cfg: Config, migration: Migration, mode: str) -> str:
     applied_at and applied_by are filled in by the table's defaults.
     """
     checksum = hashlib.sha256(migration.path.read_bytes()).hexdigest()
-    # none of the values can contain a quote: version is digits, name is [a-z0-9_],
+    # none of the values can contain a quote: version is digits and _, name is [A-Za-z0-9_-],
     # checksum is hex and mode is one of applied / baseline / captured
     return (f"INSERT INTO {cfg.meta_table} (version, name, checksum, mode) VALUES "
             f"('{migration.version}', '{migration.name}', '{checksum}', '{mode}');")
@@ -422,9 +423,12 @@ def write_migration(cfg: Config, name: str, sql: str, note: str) -> Migration:
     if not is_valid_migration_name(name):
         sys.exit("migration name: lowercase letters, digits and _ only")
     existing = list_migrations(cfg)
-    next_number = int(existing[-1].version) + 1 if existing else 1
-    version = f"{next_number:04d}"
-    path = cfg.migrations_dir / f"{version}_{name}.sql"
+    if existing and "_" in existing[-1].version:
+        version = dt.datetime.now().strftime("%Y%m%d_%H%M")
+        path = cfg.migrations_dir / f"{version}__{name}.sql"
+    else:
+        version = f"{int(existing[-1].version) + 1 if existing else 1:04d}"
+        path = cfg.migrations_dir / f"{version}_{name}.sql"
     generated_at = dt.datetime.now().isoformat(timespec="seconds")
     header = (f"-- migration: {version}_{name}\n"
               f"-- generated: {generated_at} by postgresledger/pgschema\n"
