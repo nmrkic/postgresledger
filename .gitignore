@@ -23,6 +23,7 @@ build/
 # Local working notes and their tooling - not published
 docs/plans/
 docs/status.md
+docs/ideas.md
 docs/features/
 docs/build_pdf.py
 docs/build_pptx.js
