@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 from . import pgschema, scratch
-from .compare import compare
+from .compare import compare, objects
 from .config import CONFIG_NAME, Config, Connection, relative
 from .core import (
     Migration,
@@ -32,7 +32,7 @@ from .core import (
     require_up_to_date,
     schema_files_in,
 )
-from .data import DataSettings, compare_data, read_data
+from .data import DataSettings, compare_data, read_data, rows_by_key
 from .decisions import load as load_decisions
 
 
@@ -378,3 +378,38 @@ def cmd_compare(cfg: Config, args) -> int:
     if decisions.entries:
         print(f"\n{decisions.summary((args.a, second_label))}")
     return 1 if decisions.counts["undecided"] else 0
+
+
+def cmd_report(cfg: Config, args) -> int:
+    rows: dict[str, dict] = {}  # object -> its definition (or rows) per snapshot
+    for name in args.names:
+        for item, sql in objects(snapshot_file(cfg, name).read_text()).items():
+            rows.setdefault(f"{item.type} {item.name}", {})[name] = sql
+    settings = DataSettings.from_config(cfg)
+    data_files = [data_snapshot_file(snapshot_file(cfg, name)) for name in args.names]
+    if settings and all(data_file.is_file() for data_file in data_files):
+        for name, data_file in zip(args.names, data_files, strict=True):
+            for table, content in json.loads(data_file.read_text())["tables"].items():
+                rows.setdefault(f"DATA {table}", {})[name] = rows_by_key(content, settings.ignore_columns)
+    decisions = load_decisions(cfg.decisions_file)
+    lines = [f"| object | {' | '.join(args.names)} | decision |", "|---" * (len(args.names) + 2) + "|"]
+    undecided = 0
+    for object_name, versions in sorted(rows.items()):
+        distinct = []
+        cells = []
+        for name in args.names:
+            if name not in versions:
+                cells.append("missing")
+                continue
+            if versions[name] not in distinct:
+                distinct.append(versions[name])
+            cells.append("ABCDEFGHIJ"[distinct.index(versions[name])])
+        if len(distinct) == 1 and "missing" not in cells:
+            continue
+        decided = [f"{entry.env}: {entry.decision} {entry.ticket}".strip()
+                   for entry in decisions.entries if entry.object == object_name and entry.env in args.names]
+        undecided += not decided
+        lines.append(f"| {object_name} | {' | '.join(cells)} | {'; '.join(decided) or 'undecided'} |")
+    print("\n".join(lines))
+    print(f"\n{len(lines) - 2} difference(s), {undecided} undecided; the same letter means the same definition")
+    return 1 if undecided else 0

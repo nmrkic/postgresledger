@@ -268,7 +268,8 @@ def test_ctrl_c_exits_without_a_traceback(monkeypatch, capsys):
 def test_every_command_is_there():
     names = set(cli.parser()._subparsers._group_actions[0].choices)
     assert names == {"init", "setup", "baseline", "new", "apply", "status", "drift", "capture",
-                     "snapshot", "compare"}
+                     "snapshot", "compare", "report"}
+
 
 def test_reference_data_needs_registry_and_columns(project):
     write_project_settings(project, '[data]\ntable_columns = ["name"]')
@@ -388,3 +389,17 @@ def test_one_decision_covers_every_row_of_a_reference_table(tmp_path):
     second = {"tables": {"public.color": {"key": "id", "rows": [{"id": 3}]}}, "missing": [], "unregistered": []}
     compare_data(first, second, "uat", "prod", [], decisions)
     assert decisions.counts == {"accepted": 3}
+
+
+def test_report_shows_each_difference_once_with_its_decision(project, capsys):
+    snapshots = project / "database" / "snapshots"
+    snapshots.mkdir()
+    for name, dump in [("dev", DUMP_A), ("uat", DUMP_A), ("prod", DUMP_B)]:
+        (snapshots / f"{name}.sql").write_text(dump)
+    (project / "database" / "drift-decisions.toml").write_text(DECISIONS)
+    assert run("report", "dev", "uat", "prod") == 1
+    report = capsys.readouterr().out
+    assert "| TABLE customer | A | A | B | undecided |" in report
+    assert "| TABLE orders | missing | missing | A | prod: in-flight PROJ-7 |" in report
+    assert "| INDEX customer_name_idx | A | A | missing | uat: accepted |" in report
+    assert "3 difference(s), 1 undecided" in report

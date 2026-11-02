@@ -16,7 +16,7 @@ from .config import CONFIG_NAME, Config, relative
 NO_CONFIG = {"init", "setup"}
 # commands that read the project but never touch a database
 # (compare with two snapshots; compare with one checks DATABASE_NAME itself)
-NO_DATABASE = {"new", "compare"}
+NO_DATABASE = {"new", "compare", "report"}
 # commands that dump a database or make a pgschema plan; --verbose shows pgschema's
 # debug log while it dumps and the whole plan, SQL included
 VERBOSE = {"baseline", "new", "drift", "capture", "snapshot", "compare"}
@@ -71,6 +71,10 @@ def add_verbose_argument(command_parser: argparse.ArgumentParser) -> None:
 
 def add_snapshot_arguments(command_parser: argparse.ArgumentParser) -> None:
     command_parser.add_argument("name", help="label for the database, e.g. prod")
+
+
+def add_report_arguments(command_parser: argparse.ArgumentParser) -> None:
+    command_parser.add_argument("names", nargs="+", help="snapshot names, e.g. dev uat prod")
 
 
 def add_compare_arguments(command_parser: argparse.ArgumentParser) -> None:
@@ -147,6 +151,11 @@ COMMANDS = [
         "only in b, different. Without b, a is compared with the database itself. Exit 1 on differences "
         "without a decision in decisions_file.",
         add_compare_arguments),
+    Command(
+        "compare", "report", "<a> <b> [c ...]", "differences between snapshots as one Markdown table",
+        "One row per object or reference table that is not the same in every snapshot, one column per "
+        "snapshot (the same letter means the same definition), and its decisions. Exit 1 on undecided rows.",
+        add_report_arguments),
 ]
 
 GROUPS = {

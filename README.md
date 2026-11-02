@@ -314,6 +314,10 @@ note = "backup table, drop"
 `pgl compare` then labels each difference, hides accepted ones (`--all`
 shows them) and exits 1 only on differences without a decision.
 
+`pgl report dev uat prod` prints every difference as one Markdown table:
+a row per object, a column per snapshot (the same letter means the same
+definition) and its decisions.
+
 ## Roles and grants
 
 Roles (database users and groups) belong to the whole Postgres server and
