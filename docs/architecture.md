@@ -40,6 +40,7 @@ database itself.
 | `database/schema/schema.sql` | desired state — the source of truth (with `schemas`: one `<schema>.sql` each) |
 | `database/migrations/NNNN_name.sql` | generated migrations |
 | `database/snapshots/<name>.sql` | `pgl snapshot` output, for `pgl compare` |
+| `database/drift-decisions.toml` | decisions about known differences, read by `pgl compare` |
 | `database/seed/` | demo schema + data, loaded only into `dev` |
 | `docker/` | local Postgres 17 (`localhost:55432`) with `dev`, `stage`, `prod` |
 | `docs/` | this document and the backlog |

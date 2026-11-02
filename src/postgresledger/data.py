@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 
 from .config import CONFIG_NAME, Config, Connection
 from .core import psql
+from .decisions import Decisions, accepted
 
 # the most rows printed per table and kind of difference; the counts are always complete
 ROWS_SHOWN = 10
@@ -177,7 +178,15 @@ def short(row: dict) -> str:
 
 
 def compare_data(first: dict, second: dict, first_label: str, second_label: str,
-                 ignore_columns: list[str]) -> DataComparison:
+                 ignore_columns: list[str], decisions: Decisions | None = None,
+                 show_accepted: bool = False) -> DataComparison:
+    decisions = decisions or Decisions()
+    found = {}
+
+    def shown(table: str, count: int) -> bool:
+        found[table] = decisions.find(f"DATA {table}", (first_label, second_label), count)
+        return show_accepted or not accepted(found[table])
+
     lines = []
     count = 0
     for title, names in [
@@ -190,25 +199,28 @@ def compare_data(first: dict, second: dict, first_label: str, second_label: str,
         (f"not registered in {first_label} only", sorted(set(first["unregistered"]) - set(second["unregistered"]))),
         (f"not registered in {second_label} only", sorted(set(second["unregistered"]) - set(first["unregistered"]))),
     ]:
+        count += len(names)
+        names = [name for name in names if shown(name, 1)]
         if names:
-            count += len(names)
             lines.append(f"{title} ({len(names)}):")
-            lines.extend(f"  {name}" for name in names)
+            lines.extend(f"  {name}{decisions.mark(found[name])}" for name in names)
             lines.append("")
 
     tables = []
     for name in sorted(first["tables"].keys() & second["tables"].keys()):
         difference = compare_table(name, first["tables"][name], second["tables"][name], ignore_columns)
         if difference.count:
-            tables.append(difference)
+            count += difference.count
+            if shown(name, difference.count):
+                tables.append(difference)
     if tables:
         lines.append(f"reference tables with different rows ({len(tables)}):")
         for difference in tables:
-            count += difference.count
             parts = [f"{len(difference.only_in_first)} only in {first_label}",
                      f"{len(difference.only_in_second)} only in {second_label}",
                      f"{len(difference.changed)} changed"]
-            lines.append(f"  {difference.table}: {', '.join(parts)}")
+            mark = decisions.mark(found[difference.table])
+            lines.append(f"  {difference.table}: {', '.join(parts)}{mark}")
             for label, rows in [(first_label, difference.only_in_first), (second_label, difference.only_in_second)]:
                 for row in rows[:ROWS_SHOWN]:
                     lines.append(f"      only in {label}: {short(row)}")

@@ -281,3 +281,10 @@ def test_reference_data_is_compared_row_by_row(project, monkeypatch, capfd):
     assert f'key USD: dev {{"name": "US dollar"}} -> {prod} {{"name": "Dollar"}}' in report
     assert "public.color_lookup_agencies: 1 only in dev" in report
     assert f"public.registry: 0 only in dev, 1 only in {prod}" in report
+
+    # every difference decided: compare passes
+    tables = ["public.color_lookup", "billing.currency_lookup", "public.color_lookup_agencies", "public.registry",
+              "shape_lookup"]
+    decisions = "".join(f'[[decision]]\nobject = "DATA {table}"\nenv = "{prod}"\ndecision = "fix"\n\n' for table in tables)
+    (project / "database" / "drift-decisions.toml").write_text(decisions)
+    assert run("compare", "dev") == 0

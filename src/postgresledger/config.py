@@ -64,6 +64,7 @@ class Config:
         self.schemas = list(self.schema_files)
         self.migrations_dir = self.root / project.get("migrations_dir", "database/migrations")
         self.snapshots_dir = self.root / project.get("snapshots_dir", "database/snapshots")
+        self.decisions_file = self.root / project.get("decisions_file", "database/drift-decisions.toml")
         self.meta_schema = project.get("meta_schema", DEFAULT_META_SCHEMA)
         # the major version of the scratch Postgres: the one the databases run, so a migration
         # verified there also runs on them

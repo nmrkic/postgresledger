@@ -33,6 +33,7 @@ from .core import (
     schema_files_in,
 )
 from .data import DataSettings, compare_data, read_data
+from .decisions import load as load_decisions
 
 
 def config_file_text(folder: str) -> str:
@@ -355,9 +356,9 @@ def cmd_compare(cfg: Config, args) -> int:
         print(f"- dump {cfg.target.label}")
         second_dump = dump_text(cfg, cfg.target, args.verbose)
         second_label = cfg.target.label
-    comparison = compare(first_dump, second_dump, args.a, second_label)
+    decisions = load_decisions(cfg.decisions_file)
+    comparison = compare(first_dump, second_dump, args.a, second_label, decisions, args.all)
     print(comparison.report)
-    difference_count = comparison.difference_count
 
     settings = DataSettings.from_config(cfg)
     first_data_file = data_snapshot_file(first_snapshot)
@@ -371,8 +372,9 @@ def cmd_compare(cfg: Config, args) -> int:
             print(f"- reference data {cfg.target.label}")
             second_data = read_data(cfg, settings, cfg.target)
         data_comparison = compare_data(json.loads(first_data_file.read_text()), second_data,
-                                       args.a, second_label, settings.ignore_columns)
+                                       args.a, second_label, settings.ignore_columns, decisions, args.all)
         print()
         print(data_comparison.report)
-        difference_count += data_comparison.difference_count
-    return 1 if difference_count else 0
+    if decisions.entries:
+        print(f"\n{decisions.summary((args.a, second_label))}")
+    return 1 if decisions.counts["undecided"] else 0

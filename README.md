@@ -298,6 +298,22 @@ files and records the migration as captured there. The other databases that
 already have the schema cannot run that migration, and `pgl` has no command
 yet to record it there without running it.
 
+## Decisions about known differences
+
+Differences between databases that are known can get a decision in
+`database/drift-decisions.toml` (`decisions_file` in the config):
+
+```toml
+[[decision]]
+object = "TABLE public.customer_bak"   # as compare names it; DATA <table> for reference data
+env = "uat"
+decision = "fix"                       # fix | in-flight (needs a ticket) | accepted
+note = "backup table, drop"
+```
+
+`pgl compare` then labels each difference, hides accepted ones (`--all`
+shows them) and exits 1 only on differences without a decision.
+
 ## Roles and grants
 
 Roles (database users and groups) belong to the whole Postgres server and

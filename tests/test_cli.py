@@ -12,6 +12,7 @@ from postgresledger.compare import SchemaObject, compare, objects
 from postgresledger.config import Config
 from postgresledger.core import Plan, list_migrations
 from postgresledger.data import DataSettings, compare_data
+from postgresledger.decisions import load as load_decisions
 
 DATABASE_VARIABLES = ["DATABASE_HOST", "DATABASE_PORT", "DATABASE_USER", "DATABASE_PASSWORD",
                       "DATABASE_NAME", "DATABASE_SSLMODE", "PGL_ENV_FILE"]
@@ -335,3 +336,55 @@ def test_postgres_version_defaults_to_17_and_is_checked(project):
     write_project_settings(project, 'postgres_version = "15"')
     with pytest.raises(SystemExit):
         Config(project / "postgresledger.toml")
+
+
+DECISIONS = """
+[[decision]]
+object = "INDEX customer_name_idx"
+env = "uat"
+decision = "accepted"
+
+[[decision]]
+object = "TABLE orders"
+env = "prod"
+decision = "in-flight"
+ticket = "PROJ-7"
+
+[[decision]]
+object = "TABLE gone"
+env = "prod"
+decision = "fix"
+"""
+
+
+@pytest.mark.parametrize("entry", [
+    'object = "TABLE t"\nenv = "uat"\ndecision = "maybe"',
+    'object = "TABLE t"\nenv = "uat"\ndecision = "in-flight"',
+    'object = "TABLE t"\ndecision = "fix"',
+])
+def test_invalid_decisions_are_refused(tmp_path, entry):
+    (tmp_path / "d.toml").write_text(f"[[decision]]\n{entry}\n")
+    with pytest.raises(SystemExit):
+        load_decisions(tmp_path / "d.toml")
+
+
+def test_compare_labels_decided_differences_and_hides_accepted(tmp_path):
+    (tmp_path / "d.toml").write_text(DECISIONS)
+    decisions = load_decisions(tmp_path / "d.toml")
+    report = compare(DUMP_A, DUMP_B, "uat", "prod", decisions).report
+    assert "customer_name_idx" not in report
+    assert "orders  [in-flight PROJ-7]" in report
+    assert "customer  [undecided]" in report
+    summary = decisions.summary(("uat", "prod"))
+    assert "1 undecided, 0 fix, 1 in-flight, 1 accepted" in summary
+    assert "no difference matches TABLE gone on prod" in summary
+
+
+def test_one_decision_covers_every_row_of_a_reference_table(tmp_path):
+    (tmp_path / "d.toml").write_text('[[decision]]\nobject = "DATA public.color"\nenv = "prod"\ndecision = "accepted"\n')
+    decisions = load_decisions(tmp_path / "d.toml")
+    first = {"tables": {"public.color": {"key": "id", "rows": [{"id": 1}, {"id": 2}]}},
+             "missing": [], "unregistered": []}
+    second = {"tables": {"public.color": {"key": "id", "rows": [{"id": 3}]}}, "missing": [], "unregistered": []}
+    compare_data(first, second, "uat", "prod", [], decisions)
+    assert decisions.counts == {"accepted": 3}

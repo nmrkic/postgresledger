@@ -13,6 +13,8 @@ from __future__ import annotations
 import difflib
 from dataclasses import dataclass
 
+from .decisions import Decisions, accepted
+
 HEADER_START = "-- Name: "
 # starts each schema's part in a snapshot or a migration of several schemas
 SCHEMA_MARKER = "-- schema: "
@@ -96,7 +98,9 @@ class Comparison:
     report: str  # readable, for the terminal
 
 
-def compare(first_dump: str, second_dump: str, first_label: str, second_label: str) -> Comparison:
+def compare(first_dump: str, second_dump: str, first_label: str, second_label: str,
+            decisions: Decisions | None = None, show_accepted: bool = False) -> Comparison:
+    decisions = decisions or Decisions()
     first_objects = objects(first_dump)
     second_objects = objects(second_dump)
     only_in_first = sorted(item for item in first_objects if item not in second_objects)
@@ -106,6 +110,11 @@ def compare(first_dump: str, second_dump: str, first_label: str, second_label: s
     difference_count = len(only_in_first) + len(only_in_second) + len(changed)
     # the type column is as wide as the longest type
     width = max([len(item.type) for item in [*only_in_first, *only_in_second, *changed]] + [4])
+    found = {item: decisions.find(f"{item.type} {item.name}", (first_label, second_label))
+             for item in [*only_in_first, *only_in_second, *changed]}
+    if not show_accepted:
+        only_in_first, only_in_second, changed = ([item for item in items if not accepted(found[item])]
+                                                  for items in (only_in_first, only_in_second, changed))
 
     report_lines = []
     for title, missing_objects in [(f"only in {first_label}", only_in_first),
@@ -113,12 +122,12 @@ def compare(first_dump: str, second_dump: str, first_label: str, second_label: s
         if missing_objects:
             report_lines.append(f"{title} ({len(missing_objects)}):")
             for item in missing_objects:
-                report_lines.append(f"  {item.type:<{width}}  {item.name}")
+                report_lines.append(f"  {item.type:<{width}}  {item.name}{decisions.mark(found[item])}")
             report_lines.append("")
     if changed:
         report_lines.append(f"different ({len(changed)}):")
         for item in changed:
-            report_lines.append(f"  {item.type:<{width}}  {item.name}")
+            report_lines.append(f"  {item.type:<{width}}  {item.name}{decisions.mark(found[item])}")
             diff = difflib.unified_diff(first_objects[item].splitlines(), second_objects[item].splitlines(),
                                         first_label, second_label, n=1, lineterm="")
             for diff_line in diff:

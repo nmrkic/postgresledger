@@ -76,6 +76,7 @@ def add_snapshot_arguments(command_parser: argparse.ArgumentParser) -> None:
 def add_compare_arguments(command_parser: argparse.ArgumentParser) -> None:
     command_parser.add_argument("a", help="snapshot name or file")
     command_parser.add_argument("b", nargs="?", help="snapshot name or file (default: the database)")
+    command_parser.add_argument("--all", action="store_true", help="also list differences decided as accepted")
 
 
 @dataclass(frozen=True)
@@ -143,7 +144,8 @@ COMMANDS = [
     Command(
         "compare", "compare", "<a> [b]", "differences between two snapshots",
         "Compares two snapshots (names from snapshots_dir or file paths) object by object: only in a, "
-        "only in b, different. Without b, a is compared with the database itself. Exit 1 on differences.",
+        "only in b, different. Without b, a is compared with the database itself. Exit 1 on differences "
+        "without a decision in decisions_file.",
         add_compare_arguments),
 ]
 
