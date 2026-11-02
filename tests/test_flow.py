@@ -8,6 +8,7 @@ server, pgschema or the scratch Postgres is not there.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 
@@ -219,3 +220,64 @@ def test_baseline_refuses_a_database_that_differs(project, monkeypatch):
     use(monkeypatch, "pgltest_uat")
     assert run("baseline") == 1
     assert sql("pgltest_uat", "SELECT count(*) FROM postgresledger.schema_migrations") == "0"
+
+
+# a registry that lists reference tables by name, one with a per-agency mapping table,
+# one in another schema found through the search_path
+REFERENCE_DATA = """
+CREATE SCHEMA billing;
+CREATE TABLE public.registry (id integer PRIMARY KEY, table_name text, mapping_table text);
+CREATE TABLE public.color_lookup (id integer PRIMARY KEY, name text, updated_at timestamptz DEFAULT now());
+CREATE TABLE public.color_lookup_agencies (id integer PRIMARY KEY, color_id integer, agency text);
+CREATE TABLE billing.currency_lookup (code text PRIMARY KEY, name text);
+CREATE TABLE public.size_lookup (id integer PRIMARY KEY, name text);
+INSERT INTO public.registry VALUES (1, 'color_lookup', 'color_lookup_agencies'), (2, 'currency_lookup', NULL);
+INSERT INTO public.color_lookup (id, name) VALUES (1, 'red'), (2, 'green');
+INSERT INTO public.color_lookup_agencies VALUES (1, 1, 'A');
+INSERT INTO billing.currency_lookup VALUES ('EUR', 'Euro'), ('USD', 'US dollar');
+"""
+DATA_SETTINGS = """
+[data]
+registry = "public.registry"
+table_columns = ["table_name", "mapping_table"]
+search_path = ["public", "billing"]
+ignore_columns = ["updated_at"]
+name_suffix = "_lookup"
+"""
+
+
+def test_reference_data_is_compared_row_by_row(project, monkeypatch, capfd):
+    (project / "postgresledger.toml").write_text('[project]\nschemas = ["public", "billing"]\n' + DATA_SETTINGS)
+    for db in ("pgltest_dev", "pgltest_prod"):
+        sql(db, REFERENCE_DATA)
+    use(monkeypatch, "pgltest_dev")
+    assert run("snapshot", "dev") == 0
+    data = json.loads((project / "database" / "snapshots" / "dev.data.json").read_text())
+    assert sorted(data["tables"]) == ["billing.currency_lookup", "public.color_lookup",
+                                      "public.color_lookup_agencies", "public.registry"]
+    assert data["unregistered"] == ["public.size_lookup"]
+    assert data["missing"] == []
+
+    # only an ignored column differs: identical
+    sql("pgltest_prod", "UPDATE public.color_lookup SET updated_at = now() + interval '1 day'")
+    use(monkeypatch, "pgltest_prod")
+    capfd.readouterr()
+    assert run("compare", "dev") == 0
+
+    # a row added, one changed, one deleted, and a registered table that is missing
+    sql("pgltest_prod", """
+        INSERT INTO public.color_lookup (id, name) VALUES (3, 'blue');
+        UPDATE billing.currency_lookup SET name = 'Dollar' WHERE code = 'USD';
+        DELETE FROM public.color_lookup_agencies;
+        INSERT INTO public.registry VALUES (3, 'shape_lookup', NULL);
+    """)
+    capfd.readouterr()
+    assert run("compare", "dev") == 1
+    report = capfd.readouterr().out
+    prod = f"pgltest_prod@localhost:{PORT}"
+    assert "shape_lookup" in report
+    assert f"public.color_lookup: 0 only in dev, 1 only in {prod}" in report
+    assert '"name": "blue"' in report
+    assert f'key USD: dev {{"name": "US dollar"}} -> {prod} {{"name": "Dollar"}}' in report
+    assert "public.color_lookup_agencies: 1 only in dev" in report
+    assert f"public.registry: 0 only in dev, 1 only in {prod}" in report

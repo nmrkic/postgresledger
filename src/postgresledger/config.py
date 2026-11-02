@@ -52,7 +52,10 @@ class Config:
             sys.exit(f"no {path} here - run `pgl init` first")
         self.path = path.resolve()
         self.root = self.path.parent  # paths in the config file are relative to it
-        project = tomllib.loads(self.path.read_text()).get("project", {})
+        settings = tomllib.loads(self.path.read_text())
+        project = settings.get("project", {})
+        # [data]: reference data compared by snapshot / compare, read by data.DataSettings
+        self.data_settings = settings.get("data", {})
         # every schema pgschema manages, with the file of its desired state, in the order of the config
         self.schema_files = schema_files(self.root, project)
         self.schemas = list(self.schema_files)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import time
@@ -31,6 +32,7 @@ from .core import (
     require_up_to_date,
     schema_files_in,
 )
+from .data import DataSettings, compare_data, read_data
 
 
 def config_file_text(folder: str) -> str:
@@ -313,6 +315,19 @@ def cmd_snapshot(cfg: Config, connection: Connection, args) -> None:
     snapshot.parent.mkdir(parents=True, exist_ok=True)
     snapshot.write_text(dump_text(cfg, connection, args.verbose))
     print(f"✔ {relative(snapshot)} written in {time.monotonic() - started:.1f} s")
+    if settings := DataSettings.from_config(cfg):
+        data_snapshot = data_snapshot_file(snapshot)
+        print(f"- reference data {connection.label} -> {relative(data_snapshot)}")
+        started = time.monotonic()
+        reference_data = read_data(cfg, settings, connection)
+        data_snapshot.write_text(json.dumps(reference_data, ensure_ascii=False, sort_keys=True, indent=0) + "\n")
+        print(f"✔ {relative(data_snapshot)} written in {time.monotonic() - started:.1f} s "
+              f"({len(reference_data['tables'])} tables)")
+
+
+def data_snapshot_file(snapshot: Path) -> Path:
+    """The reference data that belongs to a schema snapshot: <name>.data.json next to <name>.sql."""
+    return snapshot.with_suffix(".data.json")
 
 
 def snapshot_file(cfg: Config, name_or_path: str) -> Path:
@@ -325,9 +340,12 @@ def snapshot_file(cfg: Config, name_or_path: str) -> Path:
 
 
 def cmd_compare(cfg: Config, args) -> int:
-    first_dump = snapshot_file(cfg, args.a).read_text()
+    first_snapshot = snapshot_file(cfg, args.a)
+    first_dump = first_snapshot.read_text()
+    second_data = None
     if args.b:
-        second_dump = snapshot_file(cfg, args.b).read_text()
+        second_snapshot = snapshot_file(cfg, args.b)
+        second_dump = second_snapshot.read_text()
         second_label = args.b
     else:
         # no second snapshot: compare with the database itself, dumped right now
@@ -338,4 +356,22 @@ def cmd_compare(cfg: Config, args) -> int:
         second_label = cfg.target.label
     comparison = compare(first_dump, second_dump, args.a, second_label)
     print(comparison.report)
-    return 1 if comparison.difference_count else 0
+    difference_count = comparison.difference_count
+
+    settings = DataSettings.from_config(cfg)
+    first_data_file = data_snapshot_file(first_snapshot)
+    if settings and first_data_file.is_file():
+        if args.b:
+            second_data_file = data_snapshot_file(second_snapshot)
+            if not second_data_file.is_file():
+                sys.exit(f"no {relative(second_data_file)} - `pgl snapshot {args.b}` again to compare reference data")
+            second_data = json.loads(second_data_file.read_text())
+        else:
+            print(f"- reference data {cfg.target.label}")
+            second_data = read_data(cfg, settings, cfg.target)
+        data_comparison = compare_data(json.loads(first_data_file.read_text()), second_data,
+                                       args.a, second_label, settings.ignore_columns)
+        print()
+        print(data_comparison.report)
+        difference_count += data_comparison.difference_count
+    return 1 if difference_count else 0

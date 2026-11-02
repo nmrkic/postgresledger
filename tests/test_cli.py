@@ -11,6 +11,7 @@ from postgresledger.commands import database_name_from_folder
 from postgresledger.compare import SchemaObject, compare, objects
 from postgresledger.config import Config
 from postgresledger.core import Plan, list_migrations
+from postgresledger.data import DataSettings, compare_data
 
 DATABASE_VARIABLES = ["DATABASE_HOST", "DATABASE_PORT", "DATABASE_USER", "DATABASE_PASSWORD",
                       "DATABASE_NAME", "DATABASE_SSLMODE", "PGL_ENV_FILE"]
@@ -267,3 +268,42 @@ def test_every_command_is_there():
     names = set(cli.parser()._subparsers._group_actions[0].choices)
     assert names == {"init", "setup", "baseline", "new", "apply", "status", "drift", "capture",
                      "snapshot", "compare"}
+
+def test_reference_data_needs_registry_and_columns(project):
+    write_project_settings(project, '[data]\ntable_columns = ["name"]')
+    with pytest.raises(SystemExit):
+        DataSettings.from_config(Config(project / "postgresledger.toml"))
+    write_project_settings(project, '[data]\nregistry = "registry"\ntable_columns = ["name"]')
+    with pytest.raises(SystemExit):
+        DataSettings.from_config(Config(project / "postgresledger.toml"))
+
+
+def test_reference_data_without_data_settings_is_off(project):
+    assert DataSettings.from_config(Config(project / "postgresledger.toml")) is None
+
+
+def test_compare_data_matches_rows_by_key_and_ignores_columns():
+    first = {"tables": {"public.color": {"key": "id", "rows": [
+        {"id": 1, "name": "red", "updated_at": "a"}, {"id": 2, "name": "green", "updated_at": "a"},
+        {"id": 10, "name": "black", "updated_at": "a"}]}}, "missing": [], "unregistered": []}
+    second = {"tables": {"public.color": {"key": "id", "rows": [
+        {"id": 2, "name": "GREEN", "updated_at": "b"}, {"id": 10, "name": "black", "updated_at": "b"},
+        {"id": 3, "name": "blue", "updated_at": "b"}]},
+        "public.size": {"key": "id", "rows": []}}, "missing": ["public.shape"], "unregistered": []}
+    comparison = compare_data(first, second, "dev", "prod", ["updated_at"])
+    [color] = comparison.tables
+    assert [row["id"] for row in color.only_in_first] == [1]
+    assert [row["id"] for row in color.only_in_second] == [3]
+    assert color.changed == [("2", {"name": "green"}, {"name": "GREEN"})]
+    # 3 rows + a table only in prod + a table missing in prod only
+    assert comparison.difference_count == 5
+    assert "reference tables only in prod (1):\n  public.size" in comparison.report
+    assert "registered but missing in prod only (1):\n  public.shape" in comparison.report
+
+
+def test_compare_data_numeric_keys_sort_numerically():
+    rows = [{"id": i} for i in (10, 9, 100)]
+    first = {"tables": {"t": {"key": "id", "rows": rows}}, "missing": [], "unregistered": []}
+    second = {"tables": {"t": {"key": "id", "rows": []}}, "missing": [], "unregistered": []}
+    [table] = compare_data(first, second, "a", "b", []).tables
+    assert [row["id"] for row in table.only_in_first] == [9, 10, 100]
