@@ -14,7 +14,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from . import pgschema
-from .compare import SCHEMA_MARKER
+from .compare import SCHEMA_MARKER, objects
 from .config import Config, Connection, relative
 
 # 0001_name.sql, or <yyyyMMdd_HHmm>__<TICKET>_<name>.sql when files are written by hand on several branches
@@ -187,6 +187,37 @@ def require_up_to_date(cfg: Config, connection: Connection) -> None:
 
 
 # pgschema and the scratch server
+
+
+def load_snapshot(connection: Connection, dump: str) -> list[str]:
+    """Load a snapshot into an empty database; return the objects that could not be loaded.
+
+    An object that refers to one loaded later fails and is tried again in the next pass,
+    until a pass loads nothing more.
+    """
+    pending = list(objects(dump).items())
+    schemas = {item.name.split(".")[0] for item, _ in pending if "." in item.name} | {"public"}
+    psql(connection, "".join(f"CREATE SCHEMA IF NOT EXISTS {schema};" for schema in sorted(schemas)))
+    with tempfile.TemporaryDirectory() as temporary_dir:
+        script = Path(temporary_dir) / "snapshot.sql"
+        while pending:
+            lines, owner = ["SET check_function_bodies = off;"], {}
+            for number, (item, sql) in enumerate(pending):
+                schema = item.name.split(".")[0] if "." in item.name else "public"
+                lines.append(f"SET search_path TO {schema}, public;")
+                for line in sql.splitlines():
+                    lines.append(line)
+                    owner[len(lines)] = number
+            script.write_text("\n".join(lines) + "\n")
+            # errors are expected here (the objects for the next pass), so no check
+            result = subprocess.run(["psql", "--no-psqlrc", "--quiet", "--file", str(script)], check=False,
+                                    text=True, env={**os.environ, **connection.environment()}, capture_output=True)
+            errors = re.findall(rf"^psql:{re.escape(str(script))}:(\d+): ERROR", result.stderr, re.MULTILINE)
+            failed = sorted({owner[int(line)] for line in errors if int(line) in owner})
+            if len(failed) == len(pending):
+                break
+            pending = [pending[number] for number in failed]
+    return [f"{item.type} {item.name}" for item, _ in pending]
 
 
 def reset_database(scratch: Connection, database: str) -> Connection:

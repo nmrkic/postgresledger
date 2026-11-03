@@ -268,7 +268,7 @@ def test_ctrl_c_exits_without_a_traceback(monkeypatch, capsys):
 def test_every_command_is_there():
     names = set(cli.parser()._subparsers._group_actions[0].choices)
     assert names == {"init", "setup", "baseline", "new", "apply", "status", "drift", "capture",
-                     "snapshot", "compare", "report"}
+                     "snapshot", "compare", "report", "verify"}
 
 
 def test_reference_data_needs_registry_and_columns(project):

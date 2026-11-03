@@ -16,7 +16,7 @@ from .config import CONFIG_NAME, Config, relative
 NO_CONFIG = {"init", "setup"}
 # commands that read the project but never touch a database
 # (compare with two snapshots; compare with one checks DATABASE_NAME itself)
-NO_DATABASE = {"new", "compare", "report"}
+NO_DATABASE = {"new", "compare", "report", "verify"}
 # commands that dump a database or make a pgschema plan; --verbose shows pgschema's
 # debug log while it dumps and the whole plan, SQL included
 VERBOSE = {"baseline", "new", "drift", "capture", "snapshot", "compare"}
@@ -73,6 +73,11 @@ def add_snapshot_arguments(command_parser: argparse.ArgumentParser) -> None:
     command_parser.add_argument("name", help="label for the database, e.g. prod")
 
 
+def add_verify_arguments(command_parser: argparse.ArgumentParser) -> None:
+    command_parser.add_argument("snapshot", help="snapshot name or file, e.g. dev")
+    command_parser.add_argument("files", nargs="*", help="migration files to run (default: all)")
+
+
 def add_report_arguments(command_parser: argparse.ArgumentParser) -> None:
     command_parser.add_argument("names", nargs="+", help="snapshot names, e.g. dev uat prod")
 
@@ -126,6 +131,11 @@ COMMANDS = [
         "Runs every migration the database does not have yet, in order, each in one transaction together "
         "with its record. Refuses to run when an already applied file was edited.",
         add_apply_arguments),
+    Command(
+        "migrations", "verify", "<snapshot> [files ...]", "run migration files on a copy of a snapshot",
+        "Loads the snapshot into a scratch Postgres and runs the files on it (all migrations when none are "
+        "given), in order. Exit 1 on the first file that fails. No database is touched.",
+        add_verify_arguments),
     Command(
         "migrations", "status", "", "which migrations the database has",
         "Every migration with its state on the database: applied, baseline, captured or PENDING."),

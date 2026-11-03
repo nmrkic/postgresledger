@@ -12,6 +12,7 @@ from . import pgschema, scratch
 from .compare import compare, objects
 from .config import CONFIG_NAME, Config, Connection, relative
 from .core import (
+    SHADOW_DB,
     Migration,
     Plan,
     applied,
@@ -25,11 +26,13 @@ from .core import (
     generate_migration,
     has_changes,
     list_migrations,
+    load_snapshot,
     plan_schemas,
     print_plans,
     psql,
     record_migration_sql,
     require_up_to_date,
+    reset_database,
     schema_files_in,
 )
 from .data import DataSettings, compare_data, read_data, rows_by_key
@@ -413,3 +416,23 @@ def cmd_report(cfg: Config, args) -> int:
     print("\n".join(lines))
     print(f"\n{len(lines) - 2} difference(s), {undecided} undecided; the same letter means the same definition")
     return 1 if undecided else 0
+
+
+def cmd_verify(cfg: Config, args) -> None:
+    snapshot = snapshot_file(cfg, args.snapshot)
+    wanted = {Path(name).name for name in args.files}
+    migrations = [migration for migration in list_migrations(cfg) if not wanted or migration.path.name in wanted]
+    if missing := wanted - {migration.path.name for migration in migrations}:
+        sys.exit(f"not in {relative(cfg.migrations_dir)}: {', '.join(sorted(missing))}")
+    with scratch.server(cfg.postgres_version) as scratch_server:
+        database = reset_database(scratch_server, SHADOW_DB)
+        print(f"- loading {relative(snapshot)} into a scratch Postgres {cfg.postgres_version}")
+        not_loaded = load_snapshot(database, snapshot.read_text())
+        if not_loaded:
+            print(f"! {len(not_loaded)} object(s) of the snapshot could not be loaded: {', '.join(not_loaded[:10])}"
+                  + (", ..." if len(not_loaded) > 10 else ""))
+        ensure_meta(cfg, database)
+        for migration in migrations:
+            print(f"- running {migration.path.name}")
+            apply_file(cfg, database, migration)
+    print(f"✔ {len(migrations)} file(s) run on a copy of {args.snapshot}")

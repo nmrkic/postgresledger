@@ -288,3 +288,18 @@ def test_reference_data_is_compared_row_by_row(project, monkeypatch, capfd):
     decisions = "".join(f'[[decision]]\nobject = "DATA {table}"\nenv = "{prod}"\ndecision = "fix"\n\n' for table in tables)
     (project / "database" / "drift-decisions.toml").write_text(decisions)
     assert run("compare", "dev") == 0
+
+
+def test_verify_runs_new_files_on_a_copy_of_a_snapshot(project, monkeypatch):
+    (project / "postgresledger.toml").write_text('[project]\nschemas = ["public", "billing"]\n')
+    sql("pgltest_dev", TWO_SCHEMAS)
+    use(monkeypatch, "pgltest_dev")
+    assert run("snapshot", "dev") == 0
+    migrations = project / "database" / "migrations"
+    (migrations / "20261103_1000__PROJ-1_add_total.sql").write_text("ALTER TABLE billing.invoice ADD COLUMN total numeric;")
+    assert run("verify", "dev") == 0
+    (migrations / "20261103_1100__PROJ-2_broken.sql").write_text("ALTER TABLE billing.nothing ADD COLUMN x int;")
+    assert run("verify", "dev", "20261103_1100__PROJ-2_broken.sql") == 1
+    assert run("verify", "dev", "20261103_1000__PROJ-1_add_total.sql") == 0
+    # nothing was run on the database itself
+    assert sql("pgltest_dev", "SELECT count(*) FROM information_schema.columns WHERE column_name = 'total'") == "0"
