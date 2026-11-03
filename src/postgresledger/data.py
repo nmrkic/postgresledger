@@ -14,9 +14,11 @@ A snapshot of the data is JSON next to the schema snapshot:
 from __future__ import annotations
 
 import json
+import re
 import sys
 from dataclasses import dataclass, field
 
+from .compare import objects
 from .config import CONFIG_NAME, Config, Connection
 from .core import psql
 from .decisions import Decisions, accepted
@@ -237,3 +239,76 @@ def compare_data(first: dict, second: dict, first_label: str, second_label: str,
     else:
         lines.append(f"✔ reference data of {first_label} and {second_label} is identical ({table_count} tables)")
     return DataComparison(difference_count=count, report="\n".join(lines), tables=tables)
+
+
+def literal(value) -> str:
+    """A JSON value from a data snapshot as an SQL literal."""
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int | float):
+        return repr(value)
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+    return "'" + text.replace("'", "''") + "'"
+
+
+def references(dump: str) -> dict[str, set[str]]:
+    """The tables each table refers to with a foreign key, from a schema snapshot, as <schema>.<table>."""
+    found: dict[str, set[str]] = {}
+    for item, sql in objects(dump).items():
+        schema = item.name.split(".")[0] if "." in item.name else "public"
+        if item.type == "TABLE":
+            table = item.name.split(".")[-1]
+        elif item.type == "CONSTRAINT" and (alter := re.match(r"ALTER TABLE (\S+)", sql)):
+            table = alter.group(1).split(".")[-1]
+        else:
+            continue
+        for target in re.findall(r"REFERENCES (\S+?)\s*\(", sql):
+            found.setdefault(f"{schema}.{table}", set()).add(target if "." in target else f"{schema}.{target}")
+    return found
+
+
+def sync_sql(source: dict, target: dict, source_label: str, target_label: str, target_dump: str,
+             ignore_columns: list[str]) -> str:
+    """SQL that gives `target` the reference data rows of `source`: INSERT the missing ones, UPDATE the
+    changed ones. Rows only in `target` stay. Tables come after the tables they refer to."""
+    tables = sorted(source["tables"].keys() & target["tables"].keys())
+    refs = references(target_dump)
+    ordered: list[str] = []
+
+    def visit(table: str, path: tuple = ()) -> None:
+        if table in ordered or table in path:
+            return
+        for referenced in sorted(refs.get(table, set()) & set(tables)):
+            visit(referenced, path + (table,))
+        ordered.append(table)
+
+    for table in tables:
+        visit(table)
+    lines = [f"-- lookup rows of {source_label} copied to {target_label} (pgl lookup-sync)\n"]
+    for table in ordered:
+        if not source["tables"][table]["key"]:
+            lines.append(f"-- {table}: no single-column primary key, skipped\n")
+            continue
+        difference = compare_table(table, target["tables"][table], source["tables"][table], ignore_columns)
+        if not difference.count:
+            continue
+        key = source["tables"][table]["key"]
+        lines.append(f"-- {table}: {len(difference.only_in_second)} new, {len(difference.changed)} changed, "
+                     f"{len(difference.only_in_first)} only in {target_label} (kept)")
+        if min(len(difference.only_in_second), len(difference.only_in_first)) >= 100:
+            lines.append(f"-- WARNING: many rows only on each side; the same values may have other ids in {table}, "
+                         "check before running")
+            print(f"! {table}: many rows only on each side, see the WARNING in the SQL", file=sys.stderr)
+        for row in difference.only_in_second:
+            columns = ", ".join(f'"{column}"' for column in row)
+            values = ", ".join(literal(value) for value in row.values())
+            lines.append(f"INSERT INTO {table} ({columns}) VALUES ({values}) ON CONFLICT DO NOTHING;")
+        # rows_by_key turned the keys into text: the values as they are in the rows
+        key_values = {str(row[key]): row[key] for row in source["tables"][table]["rows"]}
+        for row_key, _, new_values in difference.changed:
+            assignments = ", ".join(f'"{column}" = {literal(value)}' for column, value in new_values.items())
+            lines.append(f'UPDATE {table} SET {assignments} WHERE "{key}" = {literal(key_values[row_key])};')
+        lines.append("")
+    return "\n".join(lines) + "\n"

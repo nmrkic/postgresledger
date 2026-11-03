@@ -11,7 +11,7 @@ from postgresledger.commands import database_name_from_folder
 from postgresledger.compare import SchemaObject, compare, objects
 from postgresledger.config import Config
 from postgresledger.core import Plan, list_migrations
-from postgresledger.data import DataSettings, compare_data
+from postgresledger.data import DataSettings, compare_data, sync_sql
 from postgresledger.decisions import load as load_decisions
 
 DATABASE_VARIABLES = ["DATABASE_HOST", "DATABASE_PORT", "DATABASE_USER", "DATABASE_PASSWORD",
@@ -268,7 +268,7 @@ def test_ctrl_c_exits_without_a_traceback(monkeypatch, capsys):
 def test_every_command_is_there():
     names = set(cli.parser()._subparsers._group_actions[0].choices)
     assert names == {"init", "setup", "baseline", "new", "apply", "status", "drift", "capture",
-                     "snapshot", "compare", "report", "verify"}
+                     "snapshot", "compare", "report", "verify", "lookup-sync"}
 
 
 def test_reference_data_needs_registry_and_columns(project):
@@ -425,3 +425,28 @@ def test_env_files_are_listed_only_for_their_env(project):
     assert [m.name for m in list_migrations(cfg)] == ["PROJ-1_add"]
     assert [m.name for m in list_migrations(cfg, "uat")] == ["PROJ-1_add", "PROJ-2_fix_uat"]
     assert [m.name for m in list_migrations(cfg, "dev")] == ["PROJ-3_fix_dev", "PROJ-1_add"]
+
+
+def test_lookup_sync_inserts_and_updates_referenced_tables_first():
+    dump = """-- schema: public
+--
+-- Name: color_agencies; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS color_agencies (id integer, color_id integer REFERENCES color (id));
+
+--
+-- Name: color; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS color (id integer, name text);
+"""
+    source = {"tables": {"public.color": {"key": "id", "rows": [{"id": 1, "name": "red"}, {"id": 2, "name": "o'range"}]},
+                         "public.color_agencies": {"key": "id", "rows": [{"id": 1, "color_id": 2}]}}}
+    target = {"tables": {"public.color": {"key": "id", "rows": [{"id": 1, "name": "Red"}, {"id": 9, "name": "uat"}]},
+                         "public.color_agencies": {"key": "id", "rows": []}}}
+    sql = sync_sql(source, target, "dev", "uat", dump, [])
+    assert sql.index("INSERT INTO public.color (") < sql.index("INSERT INTO public.color_agencies (")
+    assert """INSERT INTO public.color ("id", "name") VALUES (2, 'o''range') ON CONFLICT DO NOTHING;""" in sql
+    assert """UPDATE public.color SET "name" = 'red' WHERE "id" = 1;""" in sql
+    assert "1 only in uat (kept)" in sql and "DELETE" not in sql

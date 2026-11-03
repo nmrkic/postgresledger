@@ -16,7 +16,7 @@ from .config import CONFIG_NAME, Config, relative
 NO_CONFIG = {"init", "setup"}
 # commands that read the project but never touch a database
 # (compare with two snapshots; compare with one checks DATABASE_NAME itself)
-NO_DATABASE = {"new", "compare", "report", "verify"}
+NO_DATABASE = {"new", "compare", "report", "verify", "lookup-sync"}
 # commands that dump a database or make a pgschema plan; --verbose shows pgschema's
 # debug log while it dumps and the whole plan, SQL included
 VERBOSE = {"baseline", "new", "drift", "capture", "snapshot", "compare"}
@@ -81,6 +81,11 @@ def add_snapshot_arguments(command_parser: argparse.ArgumentParser) -> None:
 def add_verify_arguments(command_parser: argparse.ArgumentParser) -> None:
     command_parser.add_argument("snapshot", help="snapshot name or file, e.g. dev")
     command_parser.add_argument("files", nargs="*", help="migration files to run (default: all)")
+
+
+def add_lookup_sync_arguments(command_parser: argparse.ArgumentParser) -> None:
+    command_parser.add_argument("source", help="snapshot whose reference data is copied, e.g. dev")
+    command_parser.add_argument("target", help="snapshot of the database that receives it, e.g. uat")
 
 
 def add_report_arguments(command_parser: argparse.ArgumentParser) -> None:
@@ -172,6 +177,12 @@ COMMANDS = [
         "One row per object or reference table that is not the same in every snapshot, one column per "
         "snapshot (the same letter means the same definition), and its decisions. Exit 1 on undecided rows.",
         add_report_arguments),
+    Command(
+        "compare", "lookup-sync", "<source> <target>", "SQL that copies lookup rows to another database",
+        "From the two snapshots' lookup rows: INSERT for rows only in source, UPDATE for rows that differ, "
+        "tables after the tables they refer to. Rows only in target are kept. Prints the SQL, e.g. into "
+        "a migration file.",
+        add_lookup_sync_arguments),
 ]
 
 GROUPS = {

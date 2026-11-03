@@ -35,7 +35,7 @@ from .core import (
     reset_database,
     schema_files_in,
 )
-from .data import DataSettings, compare_data, read_data, rows_by_key
+from .data import DataSettings, compare_data, read_data, rows_by_key, sync_sql
 from .decisions import load as load_decisions
 
 
@@ -436,3 +436,15 @@ def cmd_verify(cfg: Config, args) -> None:
             print(f"- running {migration.path.name}")
             apply_file(cfg, database, migration)
     print(f"✔ {len(migrations)} file(s) run on a copy of {args.snapshot}")
+
+
+def cmd_lookup_sync(cfg: Config, args) -> None:
+    settings = DataSettings.from_config(cfg)
+    if not settings:
+        sys.exit(f"no [data] in {CONFIG_NAME} - nothing to copy")
+    source, target = (data_snapshot_file(snapshot_file(cfg, name)) for name in (args.source, args.target))
+    for data_file in (source, target):
+        if not data_file.is_file():
+            sys.exit(f"no {relative(data_file)} - `pgl snapshot` with [data] writes it")
+    print(sync_sql(json.loads(source.read_text()), json.loads(target.read_text()), args.source, args.target,
+                   snapshot_file(cfg, args.target).read_text(), settings.ignore_columns), end="")
