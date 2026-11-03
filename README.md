@@ -208,6 +208,9 @@ run as root (run `pgl` as a normal user, also in CI containers). To bump
 pgschema or the scratch Postgres, change `VERSION` / `VERSIONS` and the hashes in
 `src/postgresledger/pgschema.py` / `src/postgresledger/scratch.py`.
 
+For CI, `docker build -t postgresledger .` makes an image with pgl, pgschema,
+psql and the scratch Postgres 14 and 17, running as a non-root user.
+
 ## Usage
 
 In the project that owns the database:
