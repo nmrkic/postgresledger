@@ -207,7 +207,7 @@ def cmd_new(cfg: Config, args) -> None:
 
 def cmd_apply(cfg: Config, connection: Connection, args) -> None:
     applied_by_version = applied(cfg, connection)
-    migrations = list_migrations(cfg)
+    migrations = list_migrations(cfg, args.env)
     check_checksums(connection, migrations, applied_by_version)
     pending = [migration for migration in migrations if migration.version not in applied_by_version]
     if not pending:
@@ -224,7 +224,7 @@ def cmd_apply(cfg: Config, connection: Connection, args) -> None:
 
 
 def cmd_status(cfg: Config, connection: Connection, args) -> None:
-    migrations = list_migrations(cfg)
+    migrations = list_migrations(cfg, args.env)
     applied_by_version = applied(cfg, connection)
     width = max([len(migration.id) for migration in migrations] + [9])
     print(f"{connection.label}\n")

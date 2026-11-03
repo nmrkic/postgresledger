@@ -412,3 +412,16 @@ def test_hand_written_migrations_with_a_timestamp_and_ticket(project):
     found = list_migrations(Config(project / "postgresledger.toml"))
     assert [(migration.version, migration.name) for migration in found] == [
         ("20261102_1405", "PROJ-1_add_email"), ("20261103_0900", "PROJ-2_add_index")]
+
+
+def test_env_files_are_listed_only_for_their_env(project):
+    migrations = project / "database" / "migrations"
+    (migrations / "env" / "uat").mkdir(parents=True)
+    (migrations / "env" / "dev").mkdir(parents=True)
+    (migrations / "20261103_0900__PROJ-1_add.sql").write_text("")
+    (migrations / "env" / "uat" / "20261103_1000__PROJ-2_fix_uat.sql").write_text("")
+    (migrations / "env" / "dev" / "20261103_0800__PROJ-3_fix_dev.sql").write_text("")
+    cfg = Config(project / "postgresledger.toml")
+    assert [m.name for m in list_migrations(cfg)] == ["PROJ-1_add"]
+    assert [m.name for m in list_migrations(cfg, "uat")] == ["PROJ-1_add", "PROJ-2_fix_uat"]
+    assert [m.name for m in list_migrations(cfg, "dev")] == ["PROJ-3_fix_dev", "PROJ-1_add"]

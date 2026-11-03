@@ -61,6 +61,11 @@ def add_new_arguments(command_parser: argparse.ArgumentParser) -> None:
 
 def add_apply_arguments(command_parser: argparse.ArgumentParser) -> None:
     command_parser.add_argument("--dry-run", action="store_true", help="only list what would be applied")
+    add_env_argument(command_parser)
+
+
+def add_env_argument(command_parser: argparse.ArgumentParser) -> None:
+    command_parser.add_argument("--env", metavar="NAME", help="also the files in <migrations_dir>/env/NAME/")
 
 
 def add_verbose_argument(command_parser: argparse.ArgumentParser) -> None:
@@ -138,7 +143,8 @@ COMMANDS = [
         add_verify_arguments),
     Command(
         "migrations", "status", "", "which migrations the database has",
-        "Every migration with its state on the database: applied, baseline, captured or PENDING."),
+        "Every migration with its state on the database: applied, baseline, captured or PENDING.",
+        add_env_argument),
 
     Command(
         "drift", "drift", "", "list manual changes (exit 1 if any)",

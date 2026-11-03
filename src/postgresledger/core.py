@@ -75,10 +75,12 @@ class Migration:
         return f"{self.version}_{self.name}"
 
 
-def list_migrations(cfg: Config) -> list[Migration]:
+def list_migrations(cfg: Config, env: str | None = None) -> list[Migration]:
+    """The migrations, in order; with `env`, also those in <migrations_dir>/env/<env>/ (for that database only)."""
     cfg.migrations_dir.mkdir(parents=True, exist_ok=True)
+    folders = [cfg.migrations_dir] + ([cfg.migrations_dir / "env" / env] if env else [])
     out = []
-    for p in sorted(cfg.migrations_dir.iterdir()):
+    for p in sorted((p for folder in folders if folder.is_dir() for p in folder.iterdir()), key=lambda p: p.name):
         if m := MIGRATION_RE.match(p.name):
             out.append(Migration(m.group(1), m.group(2), p))
     versions = [m.version for m in out]
